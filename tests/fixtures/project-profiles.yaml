@@ -1,0 +1,21 @@
+defaults:
+  output_dir: /tmp/my-project-agents
+
+profiles:
+  deepseek:
+    invocation: claude-p
+    settings: /project/.claude/deepseek.json
+    model: deepseek-v4-pro[1m]
+    bare: true
+    timeout: 120
+    mcp_config: []
+    allowed_tools: []
+    description: DeepSeek project override.
+
+  codex:
+    invocation: cli
+    command: codex exec
+    model: gpt-5.5
+    stdin: true
+    args: [--sandbox, workspace-write]
+    description: Codex project-only profile.

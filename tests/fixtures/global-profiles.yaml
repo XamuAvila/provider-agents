@@ -1,0 +1,19 @@
+defaults:
+  output_dir: /tmp/provider-agents
+
+profiles:
+  deepseek:
+    invocation: claude-p
+    settings: /home/user/.config/provider-agents/deepseek.json
+    model: deepseek-v4-pro
+    bare: false
+    mcp_config: []
+    allowed_tools: []
+    description: DeepSeek global profile.
+
+  shared-kimi:
+    invocation: claude-p
+    settings: /home/user/.config/provider-agents/kimi.json
+    model: kimi-k2.5
+    bare: false
+    description: Kimi global profile.
