@@ -1,9 +1,8 @@
-#!/usr/bin/env node
 
 import { McpServer } from "@modelcontextprotocol/server";
 import { StdioServerTransport } from "@modelcontextprotocol/server";
 import * as z from "zod";
-import { loadMergedConfig } from "./config.js";
+import { loadMergedConfig, addProjectProfile, removeProjectProfile } from "./config.js";
 import { spawnAgent } from "./spawner.js";
 import {
   createOutputPath,
@@ -11,7 +10,7 @@ import {
   listOutputs,
   cleanupOldOutputs,
 } from "./output.js";
-import type { Config } from "./types.js";
+import type { Config, Profile, ClaudePProfile, CliProfile } from "./types.js";
 
 const server = new McpServer({
   name: "provider-agents",
@@ -54,6 +53,110 @@ server.registerTool(
 
     return {
       content: [{ type: "text" as const, text: lines.join("\n") }],
+    };
+  },
+);
+
+server.registerTool(
+  "add_profile",
+  {
+    title: "Add Profile",
+    description:
+      "Create or update a profile in the project .claude/profiles.yaml. Use invocation=claude-p for Anthropic-compatible APIs (requires settings path), or invocation=cli for standalone CLI tools.",
+    inputSchema: z.object({
+      name: z
+        .string()
+        .describe("Profile name (e.g. 'deepseek', 'kimi', 'codex')"),
+      invocation: z
+        .enum(["claude-p", "cli"])
+        .describe("Invocation type: claude-p for Anthropic-compatible APIs, cli for standalone binaries"),
+      model: z.string().describe("Model ID (e.g. 'deepseek-v4-pro', 'gpt-5.5')"),
+      description: z.string().describe("Human-readable description"),
+      settings: z
+        .string()
+        .optional()
+        .describe("Path to settings.json with API credentials (claude-p only)"),
+      command: z
+        .string()
+        .optional()
+        .describe("CLI binary name or path (cli only, e.g. 'codex exec')"),
+      system_prompt: z.string().optional().describe("System prompt text"),
+      bare: z.boolean().optional().describe("Disable hooks/plugins (claude-p only, default: false)"),
+      stdin: z.boolean().optional().describe("Send prompt via stdin (cli only, default: false)"),
+      timeout: z.number().int().min(1).optional().describe("Timeout in seconds (default: 300)"),
+      mcp_config: z.array(z.string()).optional().describe("Extra MCP config paths (claude-p only)"),
+      allowed_tools: z.array(z.string()).optional().describe("Restrict available tools (claude-p only)"),
+      args: z.array(z.string()).optional().describe("Extra CLI flags (cli only)"),
+    }),
+  },
+  async ({ name, invocation, model, description, settings, command, system_prompt, bare, stdin, timeout, mcp_config, allowed_tools, args }) => {
+    if (invocation === "claude-p" && !settings) {
+      return {
+        content: [{ type: "text" as const, text: "Error: 'settings' is required for invocation=claude-p." }],
+        isError: true,
+      };
+    }
+    if (invocation === "cli" && !command) {
+      return {
+        content: [{ type: "text" as const, text: "Error: 'command' is required for invocation=cli." }],
+        isError: true,
+      };
+    }
+
+    let profile: Profile;
+    if (invocation === "cli") {
+      profile = {
+        invocation: "cli",
+        command: command!,
+        model,
+        description,
+        system_prompt: system_prompt || undefined,
+        stdin: stdin ?? false,
+        timeout,
+        args: args ?? [],
+      } satisfies CliProfile;
+    } else {
+      profile = {
+        invocation: "claude-p",
+        settings: settings!,
+        model,
+        description,
+        system_prompt: system_prompt || undefined,
+        bare: bare ?? false,
+        timeout,
+        mcp_config: mcp_config ?? [],
+        allowed_tools: allowed_tools ?? [],
+      } satisfies ClaudePProfile;
+    }
+
+    addProjectProfile(process.cwd(), name, profile);
+
+    return {
+      content: [{ type: "text" as const, text: `Profile "${name}" [${invocation}] added/updated in .claude/profiles.yaml` }],
+    };
+  },
+);
+
+server.registerTool(
+  "remove_profile",
+  {
+    title: "Remove Profile",
+    description: "Remove a profile from the project .claude/profiles.yaml.",
+    inputSchema: z.object({
+      name: z.string().describe("Profile name to remove"),
+    }),
+  },
+  async ({ name }) => {
+    const removed = removeProjectProfile(process.cwd(), name);
+    if (!removed) {
+      return {
+        content: [{ type: "text" as const, text: `Profile "${name}" not found in .claude/profiles.yaml.` }],
+        isError: true,
+      };
+    }
+
+    return {
+      content: [{ type: "text" as const, text: `Profile "${name}" removed from .claude/profiles.yaml.` }],
     };
   },
 );

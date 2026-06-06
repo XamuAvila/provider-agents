@@ -1,5 +1,10 @@
-import { readFileSync, existsSync } from "node:fs";
-import { resolve, normalize, isAbsolute } from "node:path";
+import {
+  readFileSync,
+  writeFileSync,
+  existsSync,
+  mkdirSync,
+} from "node:fs";
+import { resolve, normalize, isAbsolute, dirname } from "node:path";
 import { homedir } from "node:os";
 import yaml from "js-yaml";
 import type { Config, RawConfig, Profile, ClaudePProfile } from "./types.js";
@@ -116,4 +121,82 @@ export function loadMergedConfig(projectDir: string): Config {
   }
 
   return { ...merged, profiles: resolved };
+}
+
+function profileToRaw(profile: Profile): Record<string, unknown> {
+  const raw: Record<string, unknown> = {
+    invocation: profile.invocation,
+    model: profile.model,
+  };
+
+  if (profile.system_prompt) raw.system_prompt = profile.system_prompt;
+  if (profile.timeout !== undefined) raw.timeout = profile.timeout;
+  if (profile.description) raw.description = profile.description;
+
+  if (profile.invocation === "claude-p") {
+    raw.settings = profile.settings;
+    if (profile.bare) raw.bare = profile.bare;
+    if (profile.mcp_config?.length) raw.mcp_config = profile.mcp_config;
+    if (profile.allowed_tools?.length)
+      raw.allowed_tools = profile.allowed_tools;
+  } else {
+    raw.command = profile.command;
+    if (profile.stdin) raw.stdin = profile.stdin;
+    if (profile.args?.length) raw.args = profile.args;
+  }
+
+  return raw;
+}
+
+export function addProjectProfile(
+  projectDir: string,
+  name: string,
+  profile: Profile,
+): void {
+  const projectPath = resolve(projectDir, ".claude", "profiles.yaml");
+  const existing = loadConfig(projectPath);
+
+  // Preserve defaults, add/overwrite the named profile
+  const rawDefaults = existing.defaults.output_dir
+    ? { output_dir: existing.defaults.output_dir }
+    : {};
+
+  const rawProfiles: Record<string, Record<string, unknown>> = {};
+  for (const [n, p] of Object.entries(existing.profiles)) {
+    rawProfiles[n] = profileToRaw(p);
+  }
+  rawProfiles[name] = profileToRaw(profile);
+
+  const raw: RawConfig = { defaults: rawDefaults, profiles: rawProfiles };
+
+  mkdirSync(dirname(projectPath), { recursive: true });
+  writeFileSync(projectPath, yaml.dump(raw, { lineWidth: -1 }), "utf-8");
+}
+
+export function removeProjectProfile(
+  projectDir: string,
+  name: string,
+): boolean {
+  const projectPath = resolve(projectDir, ".claude", "profiles.yaml");
+  const existing = loadConfig(projectPath);
+
+  if (!existing.profiles[name]) {
+    return false;
+  }
+
+  const rawDefaults = existing.defaults.output_dir
+    ? { output_dir: existing.defaults.output_dir }
+    : {};
+
+  const rawProfiles: Record<string, Record<string, unknown>> = {};
+  for (const [n, p] of Object.entries(existing.profiles)) {
+    if (n !== name) {
+      rawProfiles[n] = profileToRaw(p);
+    }
+  }
+
+  const raw: RawConfig = { defaults: rawDefaults, profiles: rawProfiles };
+
+  writeFileSync(projectPath, yaml.dump(raw, { lineWidth: -1 }), "utf-8");
+  return true;
 }
