@@ -1,0 +1,35 @@
+{
+  "name": "provider-agents",
+  "version": "0.1.0",
+  "description": "MCP server that spawns isolated LLM agent sessions across multiple providers",
+  "type": "module",
+  "bin": {
+    "provider-agents": "./build/index.js"
+  },
+  "scripts": {
+    "build": "tsup src/index.ts --format esm --dts --clean && chmod 755 build/index.js",
+    "dev": "tsx src/index.ts",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "typecheck": "tsc --noEmit"
+  },
+  "files": ["build"],
+  "keywords": ["mcp", "llm", "multi-model", "claude-code", "deepseek", "kimi"],
+  "license": "MIT",
+  "engines": {
+    "node": ">=20"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/server": "^2.0.0-alpha.2",
+    "js-yaml": "^4.1.0",
+    "zod": "^3.25.0"
+  },
+  "devDependencies": {
+    "@types/js-yaml": "^4.0.9",
+    "@types/node": "^22.0.0",
+    "tsup": "^8.0.0",
+    "tsx": "^4.0.0",
+    "typescript": "^5.7.0",
+    "vitest": "^3.0.0"
+  }
+}
