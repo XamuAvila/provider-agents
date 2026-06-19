@@ -23,6 +23,13 @@ describe("loadConfig", () => {
     const config = loadConfig(join(FIXTURES, "global-profiles.yaml"));
     expect(config.defaults.output_dir).toBe("/tmp/provider-agents");
   });
+
+  it("parses color and tags from profile", () => {
+    const config = loadConfig(join(FIXTURES, "global-profiles.yaml"));
+    const profile = config.profiles["deepseek"];
+    expect(profile.color).toBe("#2563EB");
+    expect(profile.tags).toEqual(["coding", "editing", "general"]);
+  });
 });
 
 describe("mergeConfigs", () => {

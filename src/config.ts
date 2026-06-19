@@ -47,6 +47,8 @@ function parseProfile(raw: Record<string, unknown>): Profile {
       timeout: raw.timeout as number | undefined,
       args: (raw.args as string[]) ?? [],
       description: raw.description as string,
+      color: (raw.color as string) || undefined,
+      tags: (raw.tags as string[]) ?? [],
     };
   }
 
@@ -60,6 +62,8 @@ function parseProfile(raw: Record<string, unknown>): Profile {
     mcp_config: (raw.mcp_config as string[]) ?? [],
     allowed_tools: (raw.allowed_tools as string[]) ?? [],
     description: raw.description as string,
+    color: (raw.color as string) || undefined,
+    tags: (raw.tags as string[]) ?? [],
   };
 }
 

@@ -8,6 +8,8 @@ export interface ClaudePProfile {
   mcp_config?: string[];
   allowed_tools?: string[];
   description: string;
+  color?: string;
+  tags?: string[];
 }
 
 export interface CliProfile {
@@ -19,6 +21,8 @@ export interface CliProfile {
   timeout?: number;
   args?: string[];
   description: string;
+  color?: string;
+  tags?: string[];
 }
 
 export type Profile = ClaudePProfile | CliProfile;

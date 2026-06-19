@@ -10,6 +10,8 @@ profiles:
     mcp_config: []
     allowed_tools: []
     description: DeepSeek global profile.
+    color: "#2563EB"
+    tags: [coding, editing, general]
 
   shared-kimi:
     invocation: claude-p
