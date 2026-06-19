@@ -49,6 +49,7 @@ function parseProfile(raw: Record<string, unknown>): Profile {
       description: raw.description as string,
       color: (raw.color as string) || undefined,
       tags: (raw.tags as string[]) ?? [],
+      skills: (raw.skills as string[]) ?? [],
     };
   }
 
@@ -64,6 +65,7 @@ function parseProfile(raw: Record<string, unknown>): Profile {
     description: raw.description as string,
     color: (raw.color as string) || undefined,
     tags: (raw.tags as string[]) ?? [],
+    skills: (raw.skills as string[]) ?? [],
   };
 }
 

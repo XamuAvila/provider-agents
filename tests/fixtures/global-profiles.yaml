@@ -12,6 +12,7 @@ profiles:
     description: DeepSeek global profile.
     color: "#2563EB"
     tags: [coding, editing, general]
+    skills: [design-patterns-typescript, clean-code-csharp]
 
   shared-kimi:
     invocation: claude-p

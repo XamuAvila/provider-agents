@@ -30,6 +30,12 @@ describe("loadConfig", () => {
     expect(profile.color).toBe("#2563EB");
     expect(profile.tags).toEqual(["coding", "editing", "general"]);
   });
+
+  it("parses skills from profile", () => {
+    const config = loadConfig(join(FIXTURES, "global-profiles.yaml"));
+    const profile = config.profiles["deepseek"];
+    expect(profile.skills).toEqual(["design-patterns-typescript", "clean-code-csharp"]);
+  });
 });
 
 describe("mergeConfigs", () => {

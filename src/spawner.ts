@@ -1,5 +1,6 @@
 import { spawn as cpSpawn } from "node:child_process";
 import { createWriteStream } from "node:fs";
+import { resolveSkillPaths } from "./skills.js";
 import type {
   ClaudePProfile,
   CliProfile,
@@ -30,6 +31,9 @@ export function buildClaudePArgs(
   for (const tool of profile.allowed_tools ?? []) {
     args.push("--allowedTools", tool);
   }
+  for (const skillPath of resolveSkillPaths(profile.skills ?? [])) {
+    args.push("--add-dir", skillPath);
+  }
   if (extraArgs) {
     args.push(...extraArgs);
   }
@@ -47,6 +51,7 @@ export function buildCliArgs(
   profile: CliProfile,
   prompt: string,
 ): CliSpawnArgs {
+  let prompt_ = prompt;
   const args = ["-m", profile.model];
 
   if (profile.system_prompt) {
@@ -56,15 +61,20 @@ export function buildCliArgs(
     args.push(arg);
   }
 
+  const skillPaths = resolveSkillPaths(profile.skills ?? []);
+  if (skillPaths.length > 0) {
+    prompt_ += `\n\n[Reference materials available at: ${skillPaths.join(", ")}. Read relevant files when needed.]`;
+  }
+
   const useStdin = profile.stdin ?? false;
   if (!useStdin) {
-    args.push(prompt);
+    args.push(prompt_);
   }
 
   return {
     command: profile.command,
     args,
-    stdin: useStdin ? prompt : undefined,
+    stdin: useStdin ? prompt_ : undefined,
   };
 }
 

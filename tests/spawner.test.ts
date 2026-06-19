@@ -80,6 +80,19 @@ describe("buildClaudePArgs", () => {
     const args = buildClaudePArgs(profile, "Hello", ["--add-dir", "./src"]);
     expect(args.slice(-2)).toEqual(["--add-dir", "./src"]);
   });
+
+  it("includes --add-dir entries for resolved skills", () => {
+    const profile: ClaudePProfile = {
+      invocation: "claude-p",
+      settings: "/path/to/settings.json",
+      model: "deepseek-v4-pro",
+      description: "test",
+      skills: ["design-patterns-typescript", "nonexistent-skill"],
+    };
+    const args = buildClaudePArgs(profile, "Hello");
+    expect(args).toContain("--add-dir");
+    expect(args.filter(a => a === "--add-dir")).toHaveLength(1);
+  });
 });
 
 describe("buildCliArgs", () => {
@@ -135,5 +148,32 @@ describe("buildCliArgs", () => {
     const result = buildCliArgs(profile, "Hello");
     expect(result.args).toContain("--system-prompt");
     expect(result.args).toContain("Be concise.");
+  });
+
+  it("appends skills reference note to prompt for cli when skills resolve", () => {
+    const profile: CliProfile = {
+      invocation: "cli",
+      command: "pplx",
+      model: "sonar-pro",
+      description: "test",
+      skills: ["design-patterns-typescript"],
+    };
+    const result = buildCliArgs(profile, "Hello");
+    const lastArg = result.args[result.args.length - 1];
+    expect(lastArg).toContain("Hello");
+    expect(lastArg).toContain("[Reference materials available at:");
+  });
+
+  it("appends skills reference note to stdin for cli when skills resolve", () => {
+    const profile: CliProfile = {
+      invocation: "cli",
+      command: "codex exec",
+      model: "gpt-5.5",
+      stdin: true,
+      description: "test",
+      skills: ["design-patterns-typescript"],
+    };
+    const result = buildCliArgs(profile, "Hello");
+    expect(result.stdin).toContain("[Reference materials available at:");
   });
 });

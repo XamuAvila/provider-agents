@@ -10,6 +10,7 @@ export interface ClaudePProfile {
   description: string;
   color?: string;
   tags?: string[];
+  skills?: string[];
 }
 
 export interface CliProfile {
@@ -23,6 +24,7 @@ export interface CliProfile {
   description: string;
   color?: string;
   tags?: string[];
+  skills?: string[];
 }
 
 export type Profile = ClaudePProfile | CliProfile;

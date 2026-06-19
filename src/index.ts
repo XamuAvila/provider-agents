@@ -4,6 +4,7 @@ import { StdioServerTransport } from "@modelcontextprotocol/server";
 import * as z from "zod";
 import { loadMergedConfig, addProjectProfile, removeProjectProfile } from "./config.js";
 import { spawnAgent } from "./spawner.js";
+import { listSkills, getSkill, getSkillPattern } from "./skills.js";
 import {
   createOutputPath,
   readOutput,
@@ -282,6 +283,45 @@ server.registerTool(
     return {
       content: [{ type: "text" as const, text: lines.join("\n") }],
     };
+  },
+);
+
+server.registerTool(
+  "list_skills",
+  {
+    title: "List Skills",
+    description: "List available reference skills (design patterns, clean architecture, etc.) that can be assigned to profiles.",
+    inputSchema: z.object({}),
+  },
+  async () => {
+    const skills = listSkills();
+    if (skills.length === 0) {
+      return { content: [{ type: "text" as const, text: "No skills found in skills/ directory." }] };
+    }
+    const lines = skills.map(s => `${s.name}: ${s.description || "(no description)"}`);
+    return { content: [{ type: "text" as const, text: lines.join("\n") }] };
+  },
+);
+
+server.registerTool(
+  "get_skill",
+  {
+    title: "Get Skill",
+    description: "Read a skill's content. Without pattern, returns the SKILL.md index. With pattern, returns a specific pattern file (e.g. 'behavioral/strategy').",
+    inputSchema: z.object({
+      skill: z.string().describe("Skill name (e.g. 'design-patterns-typescript')"),
+      pattern: z.string().optional().describe("Pattern path within the skill (e.g. 'behavioral/strategy')"),
+    }),
+  },
+  async ({ skill, pattern }) => {
+    const content = pattern ? getSkillPattern(skill, pattern) : getSkill(skill);
+    if (!content) {
+      return {
+        content: [{ type: "text" as const, text: `Skill "${skill}"${pattern ? ` pattern "${pattern}"` : ""} not found.` }],
+        isError: true,
+      };
+    }
+    return { content: [{ type: "text" as const, text: content }] };
   },
 );
 
