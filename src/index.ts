@@ -285,6 +285,91 @@ server.registerTool(
   },
 );
 
+server.registerTool(
+  "suggest_profile",
+  {
+    title: "Suggest Profile",
+    description:
+      "Given a task description, suggest the best provider-agent profile to handle it. " +
+      "Returns the suggested profile name, model, and description. " +
+      "When no strong match is found, lists all available profiles.",
+    inputSchema: z.object({
+      task_description: z
+        .string()
+        .describe("Description of the task to delegate (e.g. 'review this diff for security vulnerabilities')"),
+    }),
+  },
+  async ({ task_description }) => {
+    const config = getConfig();
+    const descLower = task_description.toLowerCase();
+
+    const scored: { name: string; profile: Profile; score: number }[] = [];
+
+    for (const [name, profile] of Object.entries(config.profiles)) {
+      let score = 0;
+
+      for (const tag of profile.tags ?? []) {
+        if (descLower.includes(tag.toLowerCase())) {
+          score += 3;
+        }
+      }
+
+      const descWords = profile.description.toLowerCase().split(/\s+/);
+      for (const word of descWords) {
+        if (word.length > 3 && descLower.includes(word)) {
+          score += 1;
+        }
+      }
+
+      for (const part of name.split("-")) {
+        if (part.length > 2 && descLower.includes(part)) {
+          score += 2;
+        }
+      }
+
+      if (score > 0) {
+        scored.push({ name, profile, score });
+      }
+    }
+
+    scored.sort((a, b) => b.score - a.score);
+
+    if (scored.length === 0 || scored[0].score < 2) {
+      const available = Object.entries(config.profiles)
+        .map(([name, p]) => `  ${name}: ${p.description}`)
+        .join("\n");
+      return {
+        content: [{
+          type: "text" as const,
+          text: `No strong match for this task. Available profiles:\n${available}`,
+        }],
+      };
+    }
+
+    const best = scored[0];
+    const lines = [
+      `Suggested profile: ${best.name}`,
+      `Model: ${best.profile.model}`,
+      `Description: ${best.profile.description}`,
+      best.profile.color ? `Color: ${best.profile.color}` : "",
+      "",
+      `Use: spawn_agent(profile="${best.name}", prompt="<your task>")`,
+    ].filter(Boolean);
+
+    if (scored.length > 1) {
+      lines.push("");
+      lines.push("Other matches:");
+      for (const s of scored.slice(1, 4)) {
+        lines.push(`  ${s.name} (score ${s.score}): ${s.profile.description}`);
+      }
+    }
+
+    return {
+      content: [{ type: "text" as const, text: lines.join("\n") }],
+    };
+  },
+);
+
 async function main() {
   const transport = new StdioServerTransport();
   await server.connect(transport);
