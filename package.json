@@ -13,13 +13,23 @@
     "test:watch": "vitest",
     "typecheck": "tsc --noEmit"
   },
-  "files": ["build"],
-  "keywords": ["mcp", "llm", "multi-model", "claude-code", "deepseek", "kimi"],
+  "files": [
+    "build"
+  ],
+  "keywords": [
+    "mcp",
+    "llm",
+    "multi-model",
+    "claude-code",
+    "deepseek",
+    "kimi"
+  ],
   "license": "MIT",
   "engines": {
     "node": ">=20"
   },
   "dependencies": {
+    "@cfworker/json-schema": "^4.1.1",
     "@modelcontextprotocol/server": "^2.0.0-alpha.2",
     "js-yaml": "^4.1.0",
     "zod": "^4.0.0"
