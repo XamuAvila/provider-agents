@@ -64,6 +64,14 @@ export interface Trace {
   createdAt: string;
 }
 
+export interface Candidate {
+  id: string;
+  text: string;
+  fromProfile: string;
+  score?: number;
+  critique?: string;
+}
+
 export const EMPTY_POLICY: Policy = {
   version: 0,
   rules: [],
