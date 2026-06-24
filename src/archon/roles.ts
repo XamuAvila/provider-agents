@@ -41,7 +41,10 @@ export function verifierPrompt(task: string, c: Candidate): string {
 export function unitTestPrompt(task: string): string {
   return [
     "You are the UNIT-TEST GENERATOR. Write thorough unit tests (no solution) for the task below.",
-    "Output ONLY a single fenced code block containing runnable tests that import/call the public entry point described in the task.",
+    "ANCHOR every assertion on the CONCRETE examples given in the task (docstring `>>>` examples or stated input/output cases): copy those exact expected outputs verbatim — they are ground truth.",
+    "Do NOT invent expected outputs you are unsure about: one wrong assertion poisons candidate selection. Add extra edge cases ONLY when the correct result is unambiguous.",
+    "Write each case as a SEPARATE pytest function `def test_<name>():` containing a single assert, so partial correctness is measurable (the selector ranks candidates by how many test functions pass).",
+    "Output ONLY a single fenced code block containing runnable pytest tests that import/call the public entry point described in the task.",
     `\n## Task\n${task}`,
   ].join("\n");
 }
