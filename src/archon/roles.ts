@@ -5,7 +5,8 @@ const EVIDENCE = "Every claim needs evidence (file:line or output); say 'not ver
 
 export function parseVerdict(output: string): Verdict {
   const m = output.toUpperCase().match(/\b(ACCEPT|REVISE)\b/g);
-  return m && m.length ? (m[m.length - 1] as Verdict) : "REVISE";
+  const last = m && m.length ? m[m.length - 1] : "REVISE";
+  return last === "ACCEPT" || last === "REVISE" ? last : "REVISE";
 }
 
 function listCandidates(cs: Candidate[]): string {

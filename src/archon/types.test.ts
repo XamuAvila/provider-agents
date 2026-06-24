@@ -1,7 +1,7 @@
 import { describe, it, expect } from "vitest";
 import { ROLES, isRole } from "./types.js";
 
-describe("coordinator types", () => {
+describe("archon types", () => {
   it("ROLES lists the three Sakana-style roles in order", () => {
     expect(ROLES).toEqual(["thinker", "worker", "verifier"]);
   });
