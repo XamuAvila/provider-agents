@@ -22,6 +22,40 @@ describe("deriveTags", () => {
   it("tags security tasks", () => {
     expect(deriveTags("audit this for OWASP injection vulnerabilities")).toContain("security");
   });
+
+  // --- regression: prose must NOT be mis-tagged as code ---
+  it("does not tag prose 'select ... from' as sql", () => {
+    expect(deriveTags("Select the best candidate from the list of applicants")).toEqual(["general"]);
+  });
+  it("does not tag prose 'import the dataset' as python", () => {
+    expect(deriveTags("Let's import the latest dataset")).not.toContain("python");
+  });
+  it("does not tag 'user interface design' as typescript", () => {
+    expect(deriveTags("The user interface design needs work")).not.toContain("typescript");
+  });
+  it("does not tag 'the function of the liver' as code", () => {
+    expect(deriveTags("The function of the liver is to filter blood")).toEqual(["general"]);
+  });
+  // --- positive: real code in each language ---
+  it("tags real SQL (select...from...where) as sql+code", () => {
+    const t = deriveTags("SELECT id FROM users WHERE active = 1");
+    expect(t).toContain("sql"); expect(t).toContain("code");
+  });
+  it("tags exported TS interface as typescript+code, not javascript", () => {
+    const t = deriveTags("export interface UserProfile { name: string }");
+    expect(t).toContain("typescript"); expect(t).toContain("code"); expect(t).not.toContain("javascript");
+  });
+  it("tags a JS function as javascript+code", () => {
+    const t = deriveTags("function greet(name) { return name }");
+    expect(t).toContain("javascript"); expect(t).toContain("code");
+  });
+  it("tags a C# namespace as csharp+code", () => {
+    const t = deriveTags("namespace MyApp { public class Foo {} }");
+    expect(t).toContain("csharp"); expect(t).toContain("code");
+  });
+  it("tags pure code-intent without a language as code", () => {
+    expect(deriveTags("implement a solution to this problem")).toEqual(["code"]);
+  });
 });
 
 describe("buildTrace", () => {
