@@ -1,1964 +1,601 @@
-# Coordinator (Sakana-style) Implementation Plan
+# Archon-over-OpenRouter Coordinator — Implementation Plan (v2)
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Add a learned-by-reflection coordination layer to the `provider-agents` package that orchestrates heterogeneous LLMs (Thinker/Worker/Verifier roles + Mixture-of-Agents), persists every run as a trace in the Obsidian vault, and evolves a routing/instruction policy from those traces — reaching parity with or beating Sakana's TRINITY/Conductor on our task distribution and on public benchmarks.
+**Goal:** Build, inside the `provider-agents` package, an Archon-style inference-time pipeline that composes a diverse OpenRouter model pool into layered roles — Generator ensemble (+best-of-N) → Fuser (MoA) → Critic → Ranker → Verifier (multi-verifier voting for reasoning / unit-test execution for code) — and beats any single agent on our tasks and on public benchmarks. Phase 1 ships a fixed best-practice pipeline keyed by task category; Phase 2 (separate plan) adds Bayesian architecture search and a learned controller.
 
-**Architecture:** A new `src/coordinator/` module inside the existing TS MCP package. It reuses `spawnAgent`/`loadMergedConfig` to run each turn as a real provider-agent process, reads each agent's file output back into a transcript, and runs a bounded Thinker→Worker→Verifier loop with optional MoA fan-out. Every run writes a markdown trace note to the Obsidian vault; a `reflect_policy` step reads recent traces and asks a strong `reflector` agent to evolve a human-readable `policy.md`. The next run loads that policy to bias role/model/instruction selection. This is the local, weight-free analog of TRINITY's evolutionary coordinator and Conductor's RL coordinator: the policy is **text in Obsidian**, evolved by reflection, not weights trained by gradient.
+**Architecture:** A new `src/archon/` module. Each inference-time technique is a `Layer` that transforms a list of `Candidate`s. An `ArchitectureSpec` (declarative list of layer configs, chosen per task tag) is run by an `assemble()` executor that pipes candidates through the layers, spawning real provider-agents (DeepSeek/Kimi/diverse OpenRouter models) via the existing `spawnAgent`. Code answers are verified objectively by **generating and executing unit tests in a sandbox** (Archon's biggest lever: +56% Pass@1). Reasoning answers are verified by a **multi-verifier vote**. Every run logs a trace to the Obsidian vault for the Phase-2 search to consume.
 
-**Tech Stack:** TypeScript (ESM, `type: module`), Node ≥18, `@modelcontextprotocol/server`, `js-yaml`, `zod`, Vitest, tsup. Memory layer = plain markdown files in the Obsidian vault (no MCP dependency for the happy path). Optional semantic search via the `mcp-tools-istefox` Obsidian MCP (opt-in, gated on a running server + bearer token).
+**Tech Stack:** TypeScript (ESM), Node ≥20, `@modelcontextprotocol/server`, `js-yaml`, `zod`, Vitest, tsup. Reuses `src/spawner.ts` (`spawnAgent`), `src/config.ts` (`loadMergedConfig`). Sandboxed code execution via `node:child_process` against a temp dir with a hard timeout (no network).
 
 ## Global Constraints
 
-- Package root: `/home/samuel/Documentos/pessoal/provider-agents` — all `src/**` paths are relative to it.
-- Profiles file (shared, symlinked to `~/.config/provider-agents/profiles.yaml`): `/home/samuel/Documentos/blis/repos/deepclaude/.claude/profiles.yaml`.
-- Vault root (configurable via `PROVIDER_AGENTS_VAULT` env): default `/home/samuel/Documentos/Obsidian Vault`.
-- ESM imports MUST use the `.js` extension on relative paths (e.g. `import { x } from "./types.js"`) — matches existing `src/*.ts`.
-- Immutability: never mutate inputs; return new objects (matches repo style, e.g. `config.ts:108`).
-- Only `claude-p` profiles accept `mcp_config`; `cli` profiles get the vault via `--add-dir` or prompt injection — never pass `mcp_config` to a `cli` profile.
-- Never print, echo, or log secrets, API keys, or bearer tokens — redact. The Obsidian MCP bearer token comes from env, never hardcoded.
-- All new agent-facing prompts keep the repo's evidence rules ("every claim needs file:line or command output; say 'not verified' otherwise").
-- Tests use Vitest with dependency-injected spawn/IO — NO real agent processes spawned in unit tests.
-- Run `npm run typecheck` and `npm test` green before every commit.
+- Package root: `/home/samuel/Documentos/pessoal/provider-agents` — all `src/**` paths relative to it.
+- Profiles file (shared, NOT a git repo — edit files, do NOT `git commit` there): `/home/samuel/Documentos/blis/repos/deepclaude/.claude/profiles.yaml`.
+- Vault root (env `PROVIDER_AGENTS_VAULT`, default `/home/samuel/Documentos/Obsidian Vault`).
+- ESM relative imports MUST use the `.js` extension.
+- Immutability: never mutate inputs; return new objects.
+- Only `claude-p` profiles accept `mcp_config`; `cli`/OpenRouter profiles get context via prompt or `--add-dir`.
+- Sandbox: executed code runs in a fresh temp dir, hard wall-clock timeout, killed process tree, NEVER the repo working tree; never execute code with network access; never log secrets.
+- Empirical layer rules from Archon (arxiv 2409.15254) are the Phase-1 defaults: **code → unit-test exec**, **reasoning → verifier vote**, **instruction → ranker+critic**. Generators ordered best→worst; more generators help monotonically.
+- Honest guardrails (from 2604.02460, 2502.20379): multi-agent is NOT always better than a single strong agent at equal budget; verifiers are imperfect (false positives → diminishing returns). The pipeline MUST be eval-gated and budget-aware — a trivial task routes to a single generator.
+- Tests use Vitest with dependency-injected spawn/exec — NO real agent processes or real code execution in unit tests.
+- Run `npm run typecheck` and `npm test` green before every commit. Commit messages append:
+  `Co-Authored-By: samuel-avila-blis <samuel.avila@blisai.com>` and `Claude-Session: https://claude.ai/code/session_01CTUi2ga1iUAY8AndtiNdhr`.
 
 ---
 
 ## File Structure
 
-New module `src/coordinator/` (each file one responsibility):
+`src/archon/`:
+- `types.ts` — `Role`, `Verdict`, `Turn`, `Trace`, `Policy` (FOUNDATION — **Task 1, DONE**) + Archon types `Candidate`, `LayerKind`, `LayerConfig`, `ArchitectureSpec`, `EngineDeps`.
+- `roles.ts` — role/layer prompt templates + verdict parsing (Task 2).
+- `memory.ts` — Obsidian trace/policy read+write (Task 3).
+- `trace.ts` — trace builder + task tagging → drives best-practice spec selection (Task 4).
+- `layers/generator.ts` — ensemble + best-of-N (Task 6).
+- `layers/fuser.ts` — MoA synthesis (Task 7).
+- `layers/critic.ts` + `layers/ranker.ts` — critique then rank top-K (Task 8).
+- `layers/verifier.ts` — multi-verifier vote for reasoning (Task 9).
+- `layers/unittest.ts` — unit-test generation + sandboxed execution for code (Task 10).
+- `sandbox.ts` — safe code runner used by `unittest.ts` (Task 10).
+- `assemble.ts` — run an `ArchitectureSpec` over the pool; best-practice specs per tag (Task 11).
+- `runtime.ts` + `index.ts` — adapters + barrel; MCP tool `archon_run` (Task 12).
+- `*.test.ts` — colocated Vitest tests.
 
-- `src/coordinator/types.ts` — Role, Turn, Trace, Policy, request/result types.
-- `src/coordinator/roles.ts` — role prompt templates + verifier verdict parsing.
-- `src/coordinator/memory.ts` — vault path resolution, trace/policy read+write (markdown + frontmatter).
-- `src/coordinator/policy.ts` — apply a Policy to pick the profile for a (role, task).
-- `src/coordinator/coordinate.ts` — the Thinker→Worker→Verifier loop with recursion (DI for spawn/IO).
-- `src/coordinator/moa.ts` — Mixture-of-Agents fan-out + aggregation.
-- `src/coordinator/reflect.ts` — read recent traces → spawn reflector → write evolved policy.
-- `src/coordinator/index.ts` — barrel re-export for the module.
-- `src/coordinator/*.test.ts` — Vitest unit tests, colocated.
+Modified: `src/index.ts` (register `archon_run`). Config: `deepclaude/.claude/profiles.yaml` (diverse generator pool — Task 5).
 
-Modified:
-- `src/index.ts` — register two MCP tools: `coordinate`, `reflect_policy`.
+Eval: `eval/judge.ts`, `eval/run-eval.ts`, `eval/exec-grade.ts`, `eval/tasks/ours.jsonl` (Task 13).
 
-Config / profiles (in the `deepclaude` repo, not the package):
-- `/home/samuel/Documentos/blis/repos/deepclaude/.claude/obsidian.mcp.json` — MCP server entry for the Obsidian connector (opt-in).
-- `profiles.yaml` — add `thinker`, `worker`, `verifier`, `aggregator`, `reflector` profiles.
-
-Eval harness:
-- `eval/tasks/ours.jsonl` — our real tasks (code-review / RCA) with ground truth.
-- `eval/run-eval.ts` — runs a baseline (single best agent) vs the coordinator, scores via judge, emits a report.
-- `eval/judge.ts` — LLM-judge metric (DI-tested).
-
-> **Scope note:** This plan delivers the **reflexivo coordinator** end-to-end (M0–M4): engine + memory + KB wiring + reflection + eval (our tasks + public-benchmark adapter). The **GEPA/DSPy programmatic optimizer** (the "depois" tier) is a **separate sequel plan** — it is a different stack (Python) and depends on the trace corpus this plan generates. See "Sequel" at the end.
+> **Phase 2 (separate plan):** Bayesian architecture search over `{#generators, samples, fusion layers, verifier on/off, unittest on/off}` against the eval set per task tag, plus a learned controller that loads the winning `ArchitectureSpec` per tag from Obsidian and GEPA-reflects on traces. Out of scope here; this plan ships the fixed best-practice pipeline that GENERATES the traces Phase 2 needs.
 
 ---
 
-## Milestone M0 — Module scaffolding & types
+## Phase 0 — Foundation
 
-### Task 1: Coordinator types
+### Task 1: Coordinator/Archon types — **DONE** (commit `dde3dc7`)
 
-**Files:**
-- Create: `src/coordinator/types.ts`
-- Test: `src/coordinator/types.test.ts`
+`src/archon/types.ts` already exists with `ROLES`, `Role`, `isRole`, `Verdict`, `Turn`, `CoordinationRequest`, `CoordinationResult`, `PolicyRule`, `Policy`, `Trace`, `EMPTY_POLICY` (built as `src/coordinator/types.ts`; **the implementer of Task 2 MUST move/rename the existing `src/coordinator/` directory to `src/archon/`** as its first step — `git mv src/coordinator src/archon`, then update the import paths in the moved test, run `npm test`, and commit that rename before starting Task 2's own work).
+
+- [ ] **Step 0 (Task 2 implementer does this):** `git mv src/coordinator src/archon` and fix imports; `npm test` green; commit `refactor: rename coordinator module to archon`.
+
+### Task 2: Layer prompts & verdict parsing
+
+**Files:** Modify `src/archon/roles.ts` (created during the prior plan as `coordinator/roles.ts`; if absent, create it); Test `src/archon/roles.test.ts`.
 
 **Interfaces:**
-- Consumes: nothing (leaf module).
-- Produces: `Role`, `Turn`, `Trace`, `Policy`, `PolicyRule`, `CoordinationRequest`, `CoordinationResult` — used by every other coordinator file.
+- Consumes: `Role`, `Turn`, `Verdict` from `./types.js`.
+- Produces: `buildRolePrompt(role, task, transcript)`, `parseVerdict(output)`, plus Archon layer prompts `criticPrompt(task, candidates)`, `rankerPrompt(task, candidates, critiques)`, `fuserPrompt(task, candidates)`, `verifierPrompt(task, candidate)`, `unitTestPrompt(task)`.
 
 - [ ] **Step 1: Write the failing test**
 
 ```ts
-// src/coordinator/types.test.ts
+// src/archon/roles.test.ts
 import { describe, it, expect } from "vitest";
-import { ROLES, isRole } from "./types.js";
+import { parseVerdict, fuserPrompt, criticPrompt, verifierPrompt, unitTestPrompt } from "./roles.js";
 
-describe("coordinator types", () => {
-  it("ROLES lists the three Sakana-style roles in order", () => {
-    expect(ROLES).toEqual(["thinker", "worker", "verifier"]);
+describe("archon prompts", () => {
+  it("parseVerdict reads the last verdict, default REVISE", () => {
+    expect(parseVerdict("ok ACCEPT")).toBe("ACCEPT");
+    expect(parseVerdict("bad REVISE")).toBe("REVISE");
+    expect(parseVerdict("none")).toBe("REVISE");
   });
-
-  it("isRole narrows valid role strings", () => {
-    expect(isRole("thinker")).toBe(true);
-    expect(isRole("verifier")).toBe(true);
-    expect(isRole("aggregator")).toBe(false);
-    expect(isRole("")).toBe(false);
+  it("fuserPrompt lists every candidate", () => {
+    const p = fuserPrompt("T", [{ id: "a", text: "C1", fromProfile: "x" }, { id: "b", text: "C2", fromProfile: "y" }]);
+    expect(p).toContain("C1"); expect(p).toContain("C2"); expect(p).toContain("T");
   });
-});
-```
-
-- [ ] **Step 2: Run test to verify it fails**
-
-Run: `npm test -- src/coordinator/types.test.ts`
-Expected: FAIL — `Cannot find module './types.js'`.
-
-- [ ] **Step 3: Write minimal implementation**
-
-```ts
-// src/coordinator/types.ts
-export const ROLES = ["thinker", "worker", "verifier"] as const;
-export type Role = (typeof ROLES)[number];
-
-export function isRole(value: string): value is Role {
-  return (ROLES as readonly string[]).includes(value);
-}
-
-export type Verdict = "ACCEPT" | "REVISE";
-
-export interface Turn {
-  index: number;
-  role: Role;
-  profile: string;
-  model: string;
-  instruction: string;
-  outputPath: string;
-  output: string;
-  verdict?: Verdict;
-  status: "ok" | "error" | "timeout";
-  durationMs: number;
-}
-
-export interface CoordinationRequest {
-  task: string;
-  /** candidate profile names the coordinator may route to */
-  pool: string[];
-  /** hard cap on turns (TRINITY uses 5) */
-  maxTurns?: number;
-  /** working directory passed to spawned agents */
-  cwd?: string;
-  /** when true, the worker step runs as a Mixture-of-Agents fan-out */
-  moa?: boolean;
-}
-
-export interface CoordinationResult {
-  answer: string;
-  turns: Turn[];
-  accepted: boolean;
-  traceId: string;
-}
-
-export interface PolicyRule {
-  /** lowercased substring/tag matched against the task text */
-  when: string;
-  forRole: Role;
-  preferProfile: string;
-  rationale: string;
-}
-
-export interface Policy {
-  version: number;
-  rules: PolicyRule[];
-  notes: string;
-  updatedAt: string;
-}
-
-export interface Trace {
-  id: string;
-  task: string;
-  taskTags: string[];
-  turns: Turn[];
-  accepted: boolean;
-  score?: number;
-  createdAt: string;
-}
-
-export const EMPTY_POLICY: Policy = {
-  version: 0,
-  rules: [],
-  notes: "",
-  updatedAt: "1970-01-01T00:00:00.000Z",
-};
-```
-
-- [ ] **Step 4: Run test to verify it passes**
-
-Run: `npm test -- src/coordinator/types.test.ts`
-Expected: PASS (2 tests).
-
-- [ ] **Step 5: Commit**
-
-```bash
-git add src/coordinator/types.ts src/coordinator/types.test.ts
-git commit -m "feat(coordinator): role and trace/policy types"
-```
-
----
-
-### Task 2: Role prompts & verdict parsing
-
-**Files:**
-- Create: `src/coordinator/roles.ts`
-- Test: `src/coordinator/roles.test.ts`
-
-**Interfaces:**
-- Consumes: `Role`, `Verdict`, `Turn` from `./types.js`.
-- Produces:
-  - `buildRolePrompt(role: Role, task: string, transcript: Turn[]): string`
-  - `parseVerdict(output: string): Verdict`
-
-- [ ] **Step 1: Write the failing test**
-
-```ts
-// src/coordinator/roles.test.ts
-import { describe, it, expect } from "vitest";
-import { buildRolePrompt, parseVerdict } from "./roles.js";
-import type { Turn } from "./types.js";
-
-const turn = (over: Partial<Turn>): Turn => ({
-  index: 0, role: "thinker", profile: "analyst", model: "m",
-  instruction: "", outputPath: "", output: "", status: "ok", durationMs: 1, ...over,
-});
-
-describe("roles", () => {
-  it("thinker prompt asks for decomposition and includes the task", () => {
-    const p = buildRolePrompt("thinker", "fix the race in db.ts", []);
-    expect(p).toContain("fix the race in db.ts");
-    expect(p.toLowerCase()).toContain("decompose");
+  it("criticPrompt asks for strengths and weaknesses", () => {
+    const p = criticPrompt("T", [{ id: "a", text: "C1", fromProfile: "x" }]);
+    expect(p.toLowerCase()).toContain("strength"); expect(p.toLowerCase()).toContain("weakness");
   });
-
-  it("worker prompt embeds prior transcript outputs", () => {
-    const p = buildRolePrompt("worker", "task", [turn({ output: "PRIOR_PLAN" })]);
-    expect(p).toContain("PRIOR_PLAN");
+  it("verifierPrompt demands ACCEPT/REVISE", () => {
+    const p = verifierPrompt("T", { id: "a", text: "C", fromProfile: "x" });
+    expect(p).toContain("ACCEPT"); expect(p).toContain("REVISE");
   });
-
-  it("verifier prompt demands ACCEPT or REVISE", () => {
-    const p = buildRolePrompt("verifier", "task", []);
-    expect(p).toContain("ACCEPT");
-    expect(p).toContain("REVISE");
-  });
-
-  it("parseVerdict reads the last verdict token, defaulting to REVISE", () => {
-    expect(parseVerdict("looks good. ACCEPT")).toBe("ACCEPT");
-    expect(parseVerdict("needs work REVISE please")).toBe("REVISE");
-    expect(parseVerdict("no verdict here")).toBe("REVISE");
+  it("unitTestPrompt asks for a fenced test block", () => {
+    expect(unitTestPrompt("write add()").toLowerCase()).toContain("unit test");
   });
 });
 ```
 
-- [ ] **Step 2: Run test to verify it fails**
+- [ ] **Step 2: Run test (FAIL — missing exports).** Run: `npm test -- src/archon/roles.test.ts`
 
-Run: `npm test -- src/coordinator/roles.test.ts`
-Expected: FAIL — `Cannot find module './roles.js'`.
-
-- [ ] **Step 3: Write minimal implementation**
+- [ ] **Step 3: Implement** (`src/archon/roles.ts`)
 
 ```ts
-// src/coordinator/roles.ts
-import type { Role, Turn, Verdict } from "./types.js";
+import type { Role, Verdict } from "./types.js";
+import type { Candidate } from "./types.js";
 
-const ROLE_BRIEF: Record<Role, string> = {
-  thinker:
-    "You are the THINKER. Decompose the task into a concrete plan: sub-steps, " +
-    "key risks, and what a correct solution must satisfy. Do NOT write the final " +
-    "solution — produce the strategy the worker will execute.",
-  worker:
-    "You are the WORKER. Execute the plan and produce the concrete solution " +
-    "(code, derivation, answer). Follow the transcript; do the actual work.",
-  verifier:
-    "You are the VERIFIER. Check the latest solution against the task for " +
-    "correctness and completeness. End your reply with exactly one token on its " +
-    "own: ACCEPT if it is correct and complete, or REVISE if it needs another pass. " +
-    "When REVISE, state the single most important defect first.",
-};
-
-const EVIDENCE_RULE =
-  "Every claim about code/behavior needs evidence (file:line or command output); " +
-  "say 'not verified' when you cannot prove it. Never print or log secrets.";
-
-function renderTranscript(transcript: Turn[]): string {
-  if (transcript.length === 0) return "(no prior turns)";
-  return transcript
-    .map((t) => `### Turn ${t.index} — ${t.role} (${t.profile})\n${t.output}`)
-    .join("\n\n");
-}
-
-export function buildRolePrompt(
-  role: Role,
-  task: string,
-  transcript: Turn[],
-): string {
-  return [
-    ROLE_BRIEF[role],
-    EVIDENCE_RULE,
-    `\n## Task\n${task}`,
-    `\n## Transcript so far\n${renderTranscript(transcript)}`,
-  ].join("\n");
-}
+const EVIDENCE = "Every claim needs evidence (file:line or output); say 'not verified' if unsure. Never log secrets.";
 
 export function parseVerdict(output: string): Verdict {
-  // last explicit token wins; default REVISE (fail-closed, like TRINITY's loop)
-  const matches = output.toUpperCase().match(/\b(ACCEPT|REVISE)\b/g);
-  if (!matches || matches.length === 0) return "REVISE";
-  return matches[matches.length - 1] as Verdict;
-}
-```
-
-- [ ] **Step 4: Run test to verify it passes**
-
-Run: `npm test -- src/coordinator/roles.test.ts`
-Expected: PASS (4 tests).
-
-- [ ] **Step 5: Commit**
-
-```bash
-git add src/coordinator/roles.ts src/coordinator/roles.test.ts
-git commit -m "feat(coordinator): role prompts and verdict parsing"
-```
-
----
-
-## Milestone M1 — The Thinker/Worker/Verifier loop
-
-### Task 3: Policy application (route a role to a profile)
-
-**Files:**
-- Create: `src/coordinator/policy.ts`
-- Test: `src/coordinator/policy.test.ts`
-
-**Interfaces:**
-- Consumes: `Policy`, `Role`, `PolicyRule` from `./types.js`.
-- Produces: `selectProfile(role: Role, task: string, pool: string[], policy: Policy, fallback: Record<Role, string>): string`
-
-- [ ] **Step 1: Write the failing test**
-
-```ts
-// src/coordinator/policy.test.ts
-import { describe, it, expect } from "vitest";
-import { selectProfile, DEFAULT_FALLBACK } from "./policy.js";
-import type { Policy } from "./types.js";
-
-const policy = (over: Partial<Policy> = {}): Policy => ({
-  version: 1, rules: [], notes: "", updatedAt: "2026-01-01T00:00:00.000Z", ...over,
-});
-
-describe("selectProfile", () => {
-  it("uses a matching policy rule when its profile is in the pool", () => {
-    const p = policy({
-      rules: [{ when: "typescript", forRole: "worker", preferProfile: "coder", rationale: "x" }],
-    });
-    expect(selectProfile("worker", "fix a TypeScript bug", ["coder", "deepseek"], p, DEFAULT_FALLBACK))
-      .toBe("coder");
-  });
-
-  it("ignores a rule whose profile is not in the pool", () => {
-    const p = policy({
-      rules: [{ when: "typescript", forRole: "worker", preferProfile: "ghost", rationale: "x" }],
-    });
-    expect(selectProfile("worker", "typescript task", ["deepseek"], p, DEFAULT_FALLBACK))
-      .toBe("deepseek"); // fallback worker, intersected with pool
-  });
-
-  it("falls back to the role default filtered by the pool", () => {
-    expect(selectProfile("thinker", "anything", ["analyst", "coder"], policy(), DEFAULT_FALLBACK))
-      .toBe("analyst");
-  });
-
-  it("falls back to the first pool member when no default is available", () => {
-    expect(selectProfile("verifier", "anything", ["weirdo"], policy(), DEFAULT_FALLBACK))
-      .toBe("weirdo");
-  });
-});
-```
-
-- [ ] **Step 2: Run test to verify it fails**
-
-Run: `npm test -- src/coordinator/policy.test.ts`
-Expected: FAIL — `Cannot find module './policy.js'`.
-
-- [ ] **Step 3: Write minimal implementation**
-
-```ts
-// src/coordinator/policy.ts
-import type { Policy, Role } from "./types.js";
-
-/** Role → preferred profile when the policy has no opinion. */
-export const DEFAULT_FALLBACK: Record<Role, string> = {
-  thinker: "analyst",
-  worker: "coder",
-  verifier: "reviewer",
-};
-
-export function selectProfile(
-  role: Role,
-  task: string,
-  pool: string[],
-  policy: Policy,
-  fallback: Record<Role, string>,
-): string {
-  const taskLc = task.toLowerCase();
-
-  const rule = policy.rules.find(
-    (r) =>
-      r.forRole === role &&
-      taskLc.includes(r.when.toLowerCase()) &&
-      pool.includes(r.preferProfile),
-  );
-  if (rule) return rule.preferProfile;
-
-  const def = fallback[role];
-  if (pool.includes(def)) return def;
-
-  return pool[0];
-}
-```
-
-- [ ] **Step 4: Run test to verify it passes**
-
-Run: `npm test -- src/coordinator/policy.test.ts`
-Expected: PASS (4 tests).
-
-- [ ] **Step 5: Commit**
-
-```bash
-git add src/coordinator/policy.ts src/coordinator/policy.test.ts
-git commit -m "feat(coordinator): policy-driven role-to-profile routing"
-```
-
----
-
-### Task 4: The coordination loop
-
-**Files:**
-- Create: `src/coordinator/coordinate.ts`
-- Test: `src/coordinator/coordinate.test.ts`
-
-**Interfaces:**
-- Consumes: `buildRolePrompt`, `parseVerdict` (`./roles.js`); `selectProfile`, `DEFAULT_FALLBACK` (`./policy.js`); types (`./types.js`); `SpawnResult` (`../types.js`).
-- Produces:
-  - `CoordinatorDeps` interface: `{ spawn, readOutput, outputPathFor, policy, now }`
-  - `coordinate(req: CoordinationRequest, deps: CoordinatorDeps): Promise<CoordinationResult>`
-  - The loop order is Thinker (turn 0) → Worker → Verifier, repeating Worker→Verifier on REVISE up to `maxTurns`.
-
-- [ ] **Step 1: Write the failing test**
-
-```ts
-// src/coordinator/coordinate.test.ts
-import { describe, it, expect, vi } from "vitest";
-import { coordinate, type CoordinatorDeps } from "./coordinate.js";
-import { EMPTY_POLICY } from "./types.js";
-import type { SpawnResult } from "../types.js";
-
-function makeDeps(outputs: string[]): CoordinatorDeps {
-  const queue = [...outputs];
-  const spawn = vi.fn(
-    async (profile: string): Promise<SpawnResult> => ({
-      status: "ok", exitCode: 0, outputPath: `/out/${profile}`,
-      profile, model: "m", durationMs: 1,
-    }),
-  );
-  const readOutput = vi.fn((_path: string) => queue.shift() ?? "");
-  return {
-    spawn,
-    readOutput,
-    outputPathFor: (p) => `/out/${p}`,
-    policy: EMPTY_POLICY,
-    now: () => "2026-06-23T00:00:00.000Z",
-  };
+  const m = output.toUpperCase().match(/\b(ACCEPT|REVISE)\b/g);
+  return m && m.length ? (m[m.length - 1] as Verdict) : "REVISE";
 }
 
-describe("coordinate", () => {
-  it("runs thinker→worker→verifier and stops on ACCEPT", async () => {
-    const deps = makeDeps(["PLAN", "SOLUTION", "looks correct ACCEPT"]);
-    const res = await coordinate({ task: "t", pool: ["analyst", "coder", "reviewer"] }, deps);
-
-    expect(res.turns.map((t) => t.role)).toEqual(["thinker", "worker", "verifier"]);
-    expect(res.accepted).toBe(true);
-    expect(res.answer).toBe("SOLUTION");
-    expect(deps.spawn).toHaveBeenCalledTimes(3);
-  });
-
-  it("loops worker→verifier on REVISE until maxTurns, then stops unaccepted", async () => {
-    const deps = makeDeps(["PLAN", "S1", "REVISE", "S2", "REVISE"]);
-    const res = await coordinate(
-      { task: "t", pool: ["analyst", "coder", "reviewer"], maxTurns: 5 },
-      deps,
-    );
-
-    expect(res.accepted).toBe(false);
-    expect(res.turns.filter((t) => t.role === "worker")).toHaveLength(2);
-    expect(res.answer).toBe("S2"); // last worker output
-  });
-});
-```
-
-- [ ] **Step 2: Run test to verify it fails**
-
-Run: `npm test -- src/coordinator/coordinate.test.ts`
-Expected: FAIL — `Cannot find module './coordinate.js'`.
-
-- [ ] **Step 3: Write minimal implementation**
-
-```ts
-// src/coordinator/coordinate.ts
-import { buildRolePrompt, parseVerdict } from "./roles.js";
-import { selectProfile, DEFAULT_FALLBACK } from "./policy.js";
-import type {
-  CoordinationRequest,
-  CoordinationResult,
-  Policy,
-  Role,
-  Turn,
-} from "./types.js";
-import type { SpawnResult } from "../types.js";
-
-export interface CoordinatorDeps {
-  /** spawn an agent by profile name with a prompt; resolves to process metadata */
-  spawn: (
-    profile: string,
-    prompt: string,
-    outputPath: string,
-    cwd?: string,
-  ) => Promise<SpawnResult>;
-  /** read an agent's textual output from its output file */
-  readOutput: (path: string) => string;
-  /** deterministic output path for a given profile+turn */
-  outputPathFor: (profile: string, turnIndex: number) => string;
-  policy: Policy;
-  now: () => string;
+function listCandidates(cs: Candidate[]): string {
+  return cs.map((c, i) => `### Candidate ${i + 1} (id=${c.id}, from ${c.fromProfile})\n${c.text}`).join("\n\n");
 }
 
-const MAX_TURNS_DEFAULT = 5;
-
-async function runTurn(
-  role: Role,
-  req: CoordinationRequest,
-  transcript: Turn[],
-  deps: CoordinatorDeps,
-  turnIndex: number,
-): Promise<Turn> {
-  const profile = selectProfile(
-    role,
-    req.task,
-    req.pool,
-    deps.policy,
-    DEFAULT_FALLBACK,
-  );
-  const instruction = buildRolePrompt(role, req.task, transcript);
-  const outputPath = deps.outputPathFor(profile, turnIndex);
-  const result = await deps.spawn(profile, instruction, outputPath, req.cwd);
-  const output = result.status === "ok" ? deps.readOutput(result.outputPath) : "";
-
-  return {
-    index: turnIndex,
-    role,
-    profile,
-    model: result.model,
-    instruction,
-    outputPath: result.outputPath,
-    output,
-    verdict: role === "verifier" ? parseVerdict(output) : undefined,
-    status: result.status,
-    durationMs: result.durationMs,
-  };
-}
-
-export async function coordinate(
-  req: CoordinationRequest,
-  deps: CoordinatorDeps,
-): Promise<CoordinationResult> {
-  const maxTurns = req.maxTurns ?? MAX_TURNS_DEFAULT;
-  const turns: Turn[] = [];
-
-  // Turn 0: THINKER (once)
-  turns.push(await runTurn("thinker", req, turns, deps, 0));
-
-  let accepted = false;
-  let lastWorkerOutput = "";
-
-  // Alternate WORKER → VERIFIER until ACCEPT or budget exhausted.
-  while (turns.length < maxTurns) {
-    const worker = await runTurn("worker", req, turns, deps, turns.length);
-    turns.push(worker);
-    lastWorkerOutput = worker.output || lastWorkerOutput;
-
-    if (turns.length >= maxTurns) break;
-
-    const verifier = await runTurn("verifier", req, turns, deps, turns.length);
-    turns.push(verifier);
-
-    if (verifier.verdict === "ACCEPT") {
-      accepted = true;
-      break;
-    }
-  }
-
-  return {
-    answer: lastWorkerOutput,
-    turns,
-    accepted,
-    traceId: deps.now(),
-  };
-}
-```
-
-- [ ] **Step 4: Run test to verify it passes**
-
-Run: `npm test -- src/coordinator/coordinate.test.ts`
-Expected: PASS (2 tests).
-
-- [ ] **Step 5: Commit**
-
-```bash
-git add src/coordinator/coordinate.ts src/coordinator/coordinate.test.ts
-git commit -m "feat(coordinator): thinker/worker/verifier loop with REVISE recursion"
-```
-
----
-
-## Milestone M2 — Memory (Obsidian vault)
-
-### Task 5: Trace & policy persistence
-
-**Files:**
-- Create: `src/coordinator/memory.ts`
-- Test: `src/coordinator/memory.test.ts`
-
-**Interfaces:**
-- Consumes: `Trace`, `Policy`, `EMPTY_POLICY` from `./types.js`; Node `fs`.
-- Produces:
-  - `resolveVaultDir(env?: NodeJS.ProcessEnv): string`
-  - `traceToMarkdown(trace: Trace): string`
-  - `writeTrace(trace: Trace, baseDir: string): string`
-  - `readRecentTraces(baseDir: string, limit: number): Trace[]`
-  - `readPolicy(baseDir: string): Policy`
-  - `writePolicy(policy: Policy, baseDir: string): string`
-
-- [ ] **Step 1: Write the failing test**
-
-```ts
-// src/coordinator/memory.test.ts
-import { describe, it, expect, beforeEach, afterEach } from "vitest";
-import { mkdtempSync, rmSync } from "node:fs";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
-import {
-  resolveVaultDir, writeTrace, readRecentTraces, readPolicy, writePolicy,
-} from "./memory.js";
-import type { Trace, Policy } from "./types.js";
-
-let dir: string;
-beforeEach(() => { dir = mkdtempSync(join(tmpdir(), "vault-")); });
-afterEach(() => { rmSync(dir, { recursive: true, force: true }); });
-
-const trace = (id: string): Trace => ({
-  id, task: "t " + id, taskTags: ["ts"], turns: [], accepted: true,
-  score: 1, createdAt: "2026-06-23T00:00:00.000Z",
-});
-
-describe("memory", () => {
-  it("resolveVaultDir honors the env override", () => {
-    expect(resolveVaultDir({ PROVIDER_AGENTS_VAULT: "/x/y" } as NodeJS.ProcessEnv))
-      .toBe("/x/y");
-  });
-
-  it("round-trips a trace through markdown", () => {
-    writeTrace(trace("a"), dir);
-    const got = readRecentTraces(dir, 10);
-    expect(got).toHaveLength(1);
-    expect(got[0].id).toBe("a");
-    expect(got[0].taskTags).toEqual(["ts"]);
-    expect(got[0].accepted).toBe(true);
-  });
-
-  it("readRecentTraces returns newest first, capped by limit", () => {
-    writeTrace(trace("a"), dir);
-    writeTrace(trace("b"), dir);
-    writeTrace(trace("c"), dir);
-    const got = readRecentTraces(dir, 2);
-    expect(got.map((t) => t.id)).toEqual(["c", "b"]);
-  });
-
-  it("readPolicy returns an empty policy when none exists, then round-trips", () => {
-    expect(readPolicy(dir).version).toBe(0);
-    const p: Policy = {
-      version: 3,
-      rules: [{ when: "ts", forRole: "worker", preferProfile: "coder", rationale: "r" }],
-      notes: "n", updatedAt: "2026-06-23T00:00:00.000Z",
-    };
-    writePolicy(p, dir);
-    const got = readPolicy(dir);
-    expect(got.version).toBe(3);
-    expect(got.rules[0].preferProfile).toBe("coder");
-  });
-});
-```
-
-- [ ] **Step 2: Run test to verify it fails**
-
-Run: `npm test -- src/coordinator/memory.test.ts`
-Expected: FAIL — `Cannot find module './memory.js'`.
-
-- [ ] **Step 3: Write minimal implementation**
-
-```ts
-// src/coordinator/memory.ts
-import {
-  readFileSync, writeFileSync, existsSync, mkdirSync, readdirSync,
-} from "node:fs";
-import { join } from "node:path";
-import yaml from "js-yaml";
-import type { Policy, Trace } from "./types.js";
-import { EMPTY_POLICY } from "./types.js";
-
-const DEFAULT_VAULT = "/home/samuel/Documentos/Obsidian Vault";
-const SUBDIR = "coordinator";
-const TRACES = "traces";
-const POLICY_FILE = "policy.md";
-
-export function resolveVaultDir(env: NodeJS.ProcessEnv = process.env): string {
-  return env.PROVIDER_AGENTS_VAULT ?? DEFAULT_VAULT;
-}
-
-function coordDir(baseDir: string): string {
-  return join(baseDir, SUBDIR);
-}
-
-/** Split a `---`-fenced frontmatter doc into (frontmatter object, body). */
-function splitFrontmatter(text: string): { data: Record<string, unknown>; body: string } {
-  const m = text.match(/^---\n([\s\S]*?)\n---\n?([\s\S]*)$/);
-  if (!m) return { data: {}, body: text };
-  return { data: (yaml.load(m[1]) as Record<string, unknown>) ?? {}, body: m[2] };
-}
-
-function withFrontmatter(data: Record<string, unknown>, body: string): string {
-  return `---\n${yaml.dump(data, { lineWidth: -1 })}---\n\n${body}`;
-}
-
-export function traceToMarkdown(trace: Trace): string {
-  const data = {
-    id: trace.id,
-    taskTags: trace.taskTags,
-    accepted: trace.accepted,
-    score: trace.score ?? null,
-    createdAt: trace.createdAt,
-  };
-  const body = [
-    `# Trace ${trace.id}`,
-    `\n## Task\n${trace.task}`,
-    `\n## Turns`,
-    ...trace.turns.map(
-      (t) =>
-        `\n### ${t.index} — ${t.role} (${t.profile}, ${t.model})` +
-        (t.verdict ? ` → ${t.verdict}` : "") +
-        `\n${t.output}`,
-    ),
-  ].join("\n");
-  return withFrontmatter(data, body);
-}
-
-export function writeTrace(trace: Trace, baseDir: string): string {
-  const dir = join(coordDir(baseDir), TRACES);
-  mkdirSync(dir, { recursive: true });
-  const path = join(dir, `${trace.id}.md`);
-  writeFileSync(path, traceToMarkdown(trace), "utf-8");
-  return path;
-}
-
-export function readRecentTraces(baseDir: string, limit: number): Trace[] {
-  const dir = join(coordDir(baseDir), TRACES);
-  if (!existsSync(dir)) return [];
-  const files = readdirSync(dir)
-    .filter((f) => f.endsWith(".md"))
-    .sort()
-    .reverse()
-    .slice(0, limit);
-
-  return files.map((f) => {
-    const { data, body } = splitFrontmatter(readFileSync(join(dir, f), "utf-8"));
-    const taskMatch = body.match(/## Task\n([\s\S]*?)\n## Turns/);
-    return {
-      id: String(data.id ?? f.replace(/\.md$/, "")),
-      task: taskMatch ? taskMatch[1].trim() : "",
-      taskTags: (data.taskTags as string[]) ?? [],
-      turns: [],
-      accepted: Boolean(data.accepted),
-      score: data.score == null ? undefined : Number(data.score),
-      createdAt: String(data.createdAt ?? ""),
-    };
-  });
-}
-
-export function readPolicy(baseDir: string): Policy {
-  const path = join(coordDir(baseDir), POLICY_FILE);
-  if (!existsSync(path)) return EMPTY_POLICY;
-  const { data } = splitFrontmatter(readFileSync(path, "utf-8"));
-  return {
-    version: Number(data.version ?? 0),
-    rules: (data.rules as Policy["rules"]) ?? [],
-    notes: String(data.notes ?? ""),
-    updatedAt: String(data.updatedAt ?? EMPTY_POLICY.updatedAt),
-  };
-}
-
-export function writePolicy(policy: Policy, baseDir: string): string {
-  const dir = coordDir(baseDir);
-  mkdirSync(dir, { recursive: true });
-  const path = join(dir, POLICY_FILE);
-  const body = [
-    `# Coordinator Policy (v${policy.version})`,
-    `\nUpdated: ${policy.updatedAt}`,
-    `\n## Notes\n${policy.notes}`,
-    `\n## Rules`,
-    ...policy.rules.map(
-      (r) => `- when \`${r.when}\` & role **${r.forRole}** → \`${r.preferProfile}\` (${r.rationale})`,
-    ),
-  ].join("\n");
-  writeFileSync(
-    path,
-    withFrontmatter(
-      { version: policy.version, rules: policy.rules, notes: policy.notes, updatedAt: policy.updatedAt },
-      body,
-    ),
-    "utf-8",
-  );
-  return path;
-}
-```
-
-- [ ] **Step 4: Run test to verify it passes**
-
-Run: `npm test -- src/coordinator/memory.test.ts`
-Expected: PASS (4 tests).
-
-- [ ] **Step 5: Commit**
-
-```bash
-git add src/coordinator/memory.ts src/coordinator/memory.test.ts
-git commit -m "feat(coordinator): Obsidian trace and policy persistence"
-```
-
----
-
-### Task 6: Trace builder + tagging
-
-**Files:**
-- Create: `src/coordinator/trace.ts`
-- Test: `src/coordinator/trace.test.ts`
-
-**Interfaces:**
-- Consumes: `CoordinationResult`, `Trace`, `Turn` from `./types.js`.
-- Produces:
-  - `deriveTags(task: string): string[]`
-  - `buildTrace(task: string, result: CoordinationResult, createdAt: string): Trace`
-
-- [ ] **Step 1: Write the failing test**
-
-```ts
-// src/coordinator/trace.test.ts
-import { describe, it, expect } from "vitest";
-import { deriveTags, buildTrace } from "./trace.js";
-import type { CoordinationResult } from "./types.js";
-
-describe("trace", () => {
-  it("deriveTags picks language/domain keywords", () => {
-    expect(deriveTags("Fix a TypeScript async race")).toContain("typescript");
-    expect(deriveTags("review this SQL query")).toContain("sql");
-    expect(deriveTags("nothing special")).toEqual(["general"]);
-  });
-
-  it("buildTrace copies id from result and tags from task", () => {
-    const result: CoordinationResult = {
-      answer: "A", accepted: true, traceId: "2026-06-23T00:00:00.000Z", turns: [],
-    };
-    const t = buildTrace("a python bug", result, "2026-06-23T00:00:00.000Z");
-    expect(t.id).toBe("2026-06-23T00:00:00.000Z");
-    expect(t.taskTags).toContain("python");
-    expect(t.accepted).toBe(true);
-  });
-});
-```
-
-- [ ] **Step 2: Run test to verify it fails**
-
-Run: `npm test -- src/coordinator/trace.test.ts`
-Expected: FAIL — `Cannot find module './trace.js'`.
-
-- [ ] **Step 3: Write minimal implementation**
-
-```ts
-// src/coordinator/trace.ts
-import type { CoordinationResult, Trace } from "./types.js";
-
-const TAG_KEYWORDS: Record<string, string[]> = {
-  typescript: ["typescript", "tsx", ".ts"],
-  javascript: ["javascript", "node.js", "nodejs"],
-  python: ["python", ".py"],
-  csharp: ["c#", ".net", "csharp"],
-  sql: ["sql", "postgres", "query"],
-  security: ["security", "owasp", "vulnerab"],
-  refactor: ["refactor", "cleanup", "dead code"],
-};
-
-export function deriveTags(task: string): string[] {
-  const lc = task.toLowerCase();
-  const tags = Object.entries(TAG_KEYWORDS)
-    .filter(([, kws]) => kws.some((k) => lc.includes(k)))
-    .map(([tag]) => tag);
-  return tags.length > 0 ? tags : ["general"];
-}
-
-export function buildTrace(
-  task: string,
-  result: CoordinationResult,
-  createdAt: string,
-): Trace {
-  return {
-    id: result.traceId,
-    task,
-    taskTags: deriveTags(task),
-    turns: result.turns,
-    accepted: result.accepted,
-    createdAt,
-  };
-}
-```
-
-- [ ] **Step 4: Run test to verify it passes**
-
-Run: `npm test -- src/coordinator/trace.test.ts`
-Expected: PASS (2 tests).
-
-- [ ] **Step 5: Commit**
-
-```bash
-git add src/coordinator/trace.ts src/coordinator/trace.test.ts
-git commit -m "feat(coordinator): trace builder with task tagging"
-```
-
----
-
-## Milestone M3 — MoA, shared knowledge base, and reflection
-
-### Task 7: Mixture-of-Agents fan-out
-
-**Files:**
-- Create: `src/coordinator/moa.ts`
-- Test: `src/coordinator/moa.test.ts`
-
-**Interfaces:**
-- Consumes: `CoordinatorDeps` from `./coordinate.js`.
-- Produces: `mixtureOfAgents(task: string, proposers: string[], aggregator: string, deps: CoordinatorDeps): Promise<{ answer: string; proposals: string[] }>`
-  - Proposers run concurrently (one spawn each); the aggregator receives all proposals and synthesizes one answer.
-
-- [ ] **Step 1: Write the failing test**
-
-```ts
-// src/coordinator/moa.test.ts
-import { describe, it, expect, vi } from "vitest";
-import { mixtureOfAgents } from "./moa.js";
-import type { CoordinatorDeps } from "./coordinate.js";
-import { EMPTY_POLICY } from "./types.js";
-import type { SpawnResult } from "../types.js";
-
-function deps(map: Record<string, string>): CoordinatorDeps {
-  return {
-    spawn: vi.fn(async (profile: string): Promise<SpawnResult> => ({
-      status: "ok", exitCode: 0, outputPath: `/out/${profile}`, profile, model: "m", durationMs: 1,
-    })),
-    readOutput: (path: string) => map[path] ?? "",
-    outputPathFor: (p) => `/out/${p}`,
-    policy: EMPTY_POLICY,
-    now: () => "t",
-  };
-}
-
-describe("mixtureOfAgents", () => {
-  it("collects all proposer outputs and returns the aggregator's synthesis", async () => {
-    const d = deps({
-      "/out/openrouter-coder": "P1",
-      "/out/coder": "P2",
-      "/out/aggregator": "FINAL",
-    });
-    const res = await mixtureOfAgents("task", ["openrouter-coder", "coder"], "aggregator", d);
-    expect(res.proposals).toEqual(["P1", "P2"]);
-    expect(res.answer).toBe("FINAL");
-    expect(d.spawn).toHaveBeenCalledTimes(3); // 2 proposers + 1 aggregator
-  });
-});
-```
-
-- [ ] **Step 2: Run test to verify it fails**
-
-Run: `npm test -- src/coordinator/moa.test.ts`
-Expected: FAIL — `Cannot find module './moa.js'`.
-
-- [ ] **Step 3: Write minimal implementation**
-
-```ts
-// src/coordinator/moa.ts
-import type { CoordinatorDeps } from "./coordinate.js";
-
-const PROPOSER_BRIEF =
-  "Propose your best independent solution to the task. Be concrete and complete.";
-
-function aggregatorPrompt(task: string, proposals: string[]): string {
-  const listed = proposals
-    .map((p, i) => `### Proposal ${i + 1}\n${p}`)
-    .join("\n\n");
+export function fuserPrompt(task: string, cs: Candidate[]): string {
   return [
-    "You are the AGGREGATOR. Several agents proposed solutions to the task.",
-    "Synthesize a single best answer: keep what is correct, discard what is wrong,",
-    "and reconcile contradictions. Cite which proposal a claim came from when it matters.",
+    "You are the FUSER. Synthesize ONE best answer from the candidates: keep what is correct, drop what is wrong, reconcile conflicts.",
+    EVIDENCE, `\n## Task\n${task}`, `\n## Candidates\n${listCandidates(cs)}`,
+  ].join("\n");
+}
+export function criticPrompt(task: string, cs: Candidate[]): string {
+  return [
+    "You are the CRITIC. For EACH candidate output a line `id=<id>: strengths=...; weaknesses=...`. Be specific and terse.",
+    `\n## Task\n${task}`, `\n## Candidates\n${listCandidates(cs)}`,
+  ].join("\n");
+}
+export function rankerPrompt(task: string, cs: Candidate[], critiques: string): string {
+  return [
+    "You are the RANKER. Using the critiques, output the candidate ids best-first as a fenced ```json array of ids, e.g. [\"b\",\"a\"].",
+    `\n## Task\n${task}`, `\n## Critiques\n${critiques}`, `\n## Candidates\n${listCandidates(cs)}`,
+  ].join("\n");
+}
+export function verifierPrompt(task: string, c: Candidate): string {
+  return [
+    "You are a VERIFIER. Check the candidate for correctness and completeness against the task.",
+    "End with exactly one token on its own line: ACCEPT or REVISE.",
+    EVIDENCE, `\n## Task\n${task}`, `\n## Candidate\n${c.text}`,
+  ].join("\n");
+}
+export function unitTestPrompt(task: string): string {
+  return [
+    "You are the UNIT-TEST GENERATOR. Write thorough unit tests (no solution) for the task below.",
+    "Output ONLY a single fenced code block containing runnable tests that import/call the public entry point described in the task.",
     `\n## Task\n${task}`,
-    `\n## Proposals\n${listed}`,
   ].join("\n");
 }
-
-export async function mixtureOfAgents(
-  task: string,
-  proposers: string[],
-  aggregator: string,
-  deps: CoordinatorDeps,
-): Promise<{ answer: string; proposals: string[] }> {
-  const proposals = await Promise.all(
-    proposers.map(async (profile, i) => {
-      const outputPath = deps.outputPathFor(profile, i);
-      const prompt = `${PROPOSER_BRIEF}\n\n## Task\n${task}`;
-      const r = await deps.spawn(profile, prompt, outputPath);
-      return r.status === "ok" ? deps.readOutput(r.outputPath) : "";
-    }),
-  );
-
-  const aggPath = deps.outputPathFor(aggregator, proposers.length);
-  const aggRes = await deps.spawn(aggregator, aggregatorPrompt(task, proposals), aggPath);
-  const answer = aggRes.status === "ok" ? deps.readOutput(aggRes.outputPath) : "";
-
-  return { answer, proposals };
+export function buildRolePrompt(role: Role, task: string, transcript: { role: Role; output: string }[]): string {
+  const brief: Record<Role, string> = {
+    thinker: "You are the THINKER. Decompose into a plan; do not write the final solution.",
+    worker: "You are the WORKER. Execute the plan and produce the concrete solution.",
+    verifier: "You are the VERIFIER. Check the latest solution; end with ACCEPT or REVISE.",
+  };
+  const t = transcript.length ? transcript.map((x) => `### ${x.role}\n${x.output}`).join("\n\n") : "(none)";
+  return [brief[role], EVIDENCE, `\n## Task\n${task}`, `\n## Transcript\n${t}`].join("\n");
 }
 ```
 
-- [ ] **Step 4: Run test to verify it passes**
+- [ ] **Step 4: Run test (PASS).** `npm test -- src/archon/roles.test.ts`
+- [ ] **Step 5: Commit** `feat(archon): layer prompts (fuser/critic/ranker/verifier/unittest) and verdict parsing`
 
-Run: `npm test -- src/coordinator/moa.test.ts`
-Expected: PASS (1 test).
+### Task 3: Obsidian memory (trace + policy)
 
-- [ ] **Step 5: Commit**
+Carry over the memory module from the prior plan verbatim, in `src/archon/memory.ts` with `resolveVaultDir`, `writeTrace`, `readRecentTraces`, `readPolicy`, `writePolicy` and tests (round-trip a trace; newest-first; empty-policy default). **(Full code: see prior plan version in git history of this file; the implementer reuses it unchanged, only the import path is `./types.js` under `src/archon/`.)**
 
-```bash
-git add src/coordinator/moa.ts src/coordinator/moa.test.ts
-git commit -m "feat(coordinator): mixture-of-agents fan-out and aggregation"
-```
+- [ ] Steps: failing test → implement (markdown+frontmatter serialization to `<vault>/coordinator/traces/<id>.md` and `<vault>/coordinator/policy.md`) → pass → commit `feat(archon): Obsidian trace and policy persistence`.
+
+### Task 4: Trace builder + task tagging
+
+`src/archon/trace.ts`: `deriveTags(task)` → `["typescript"|"python"|"sql"|"security"|"reasoning"|"code"|"general", ...]`, `buildTrace(task, result, createdAt)`. Tags drive best-practice spec selection in Task 11 (code-ish tags → unit-test pipeline; reasoning → verifier pipeline). Failing test (tags + build) → implement → pass → commit `feat(archon): trace builder with task tagging`.
 
 ---
 
-### Task 8: Shared knowledge-base injection (the Obsidian wiring)
+## Phase 1 — The Archon best-practice pipeline
 
-**Files:**
-- Create: `src/coordinator/knowledge.ts`
-- Test: `src/coordinator/knowledge.test.ts`
+### Task 5: Diverse OpenRouter generator pool (profiles)
 
-**Interfaces:**
-- Consumes: `Policy` from `./types.js`; `readPolicy` from `./memory.js`.
-- Produces:
-  - `kbExtraArgs(baseDir: string): string[]` — `["--add-dir", "<vault>/coordinator"]` so every claude-p agent can READ the shared KB (policy + traces) as files.
-  - `kbPreamble(policy: Policy): string` — a compact text block (current policy) the coordinator prepends to every agent prompt, so even `cli` agents (which cannot take `mcp_config`) share the knowledge.
+**Files (edit, NO git commit — deepclaude is not a repo):** `/home/samuel/Documentos/blis/repos/deepclaude/.claude/profiles.yaml`.
 
-> **Design note (the user's mechanism):** claude-p profiles get the live Obsidian MCP via `mcp_config` in `profiles.yaml` (Task 11). For everything else — and as the always-on baseline — the coordinator injects `kbPreamble()` into prompts and exposes the vault via `--add-dir`. This realizes "agents share one knowledge base" without depending on the MCP server being up.
+**Interfaces:** Produces profile names the generator ensemble routes to. Add a curated diverse set of OpenRouter `:free` + paid models as `cli` profiles using the existing `openrouter-agent` wrapper, ordered best→worst per Archon guidance.
 
-- [ ] **Step 1: Write the failing test**
-
-```ts
-// src/coordinator/knowledge.test.ts
-import { describe, it, expect } from "vitest";
-import { kbExtraArgs, kbPreamble } from "./knowledge.js";
-import type { Policy } from "./types.js";
-
-describe("knowledge", () => {
-  it("kbExtraArgs points --add-dir at the coordinator KB folder", () => {
-    expect(kbExtraArgs("/vault")).toEqual(["--add-dir", "/vault/coordinator"]);
-  });
-
-  it("kbPreamble summarizes the active policy rules", () => {
-    const p: Policy = {
-      version: 2,
-      rules: [{ when: "typescript", forRole: "worker", preferProfile: "coder", rationale: "fast" }],
-      notes: "prefer evidence", updatedAt: "2026-06-23T00:00:00.000Z",
-    };
-    const text = kbPreamble(p);
-    expect(text).toContain("policy v2");
-    expect(text).toContain("typescript");
-    expect(text).toContain("coder");
-  });
-
-  it("kbPreamble is concise when the policy is empty", () => {
-    const text = kbPreamble({ version: 0, rules: [], notes: "", updatedAt: "x" });
-    expect(text).toContain("no learned policy");
-  });
-});
-```
-
-- [ ] **Step 2: Run test to verify it fails**
-
-Run: `npm test -- src/coordinator/knowledge.test.ts`
-Expected: FAIL — `Cannot find module './knowledge.js'`.
-
-- [ ] **Step 3: Write minimal implementation**
-
-```ts
-// src/coordinator/knowledge.ts
-import { join } from "node:path";
-import type { Policy } from "./types.js";
-
-export function kbExtraArgs(baseDir: string): string[] {
-  return ["--add-dir", join(baseDir, "coordinator")];
-}
-
-export function kbPreamble(policy: Policy): string {
-  if (policy.rules.length === 0) {
-    return "## Shared knowledge base\n(no learned policy yet — use your best judgment.)";
-  }
-  const rules = policy.rules
-    .map((r) => `- ${r.forRole}: when task ~ \`${r.when}\` prefer \`${r.preferProfile}\` (${r.rationale})`)
-    .join("\n");
-  return [
-    `## Shared knowledge base — policy v${policy.version}`,
-    policy.notes ? `Notes: ${policy.notes}` : "",
-    rules,
-  ]
-    .filter(Boolean)
-    .join("\n");
-}
-```
-
-- [ ] **Step 4: Run test to verify it passes**
-
-Run: `npm test -- src/coordinator/knowledge.test.ts`
-Expected: PASS (3 tests).
-
-- [ ] **Step 5: Commit**
-
-```bash
-git add src/coordinator/knowledge.ts src/coordinator/knowledge.test.ts
-git commit -m "feat(coordinator): shared knowledge-base injection (--add-dir + policy preamble)"
-```
-
----
-
-### Task 9: Reflection — evolve the policy from traces
-
-**Files:**
-- Create: `src/coordinator/reflect.ts`
-- Test: `src/coordinator/reflect.test.ts`
-
-**Interfaces:**
-- Consumes: `readRecentTraces`, `readPolicy`, `writePolicy` (`./memory.js`); `Policy`, `Trace` (`./types.js`); `SpawnResult` (`../types.js`).
-- Produces:
-  - `ReflectDeps`: `{ spawn, readOutput, outputPathFor, now }`
-  - `buildReflectionPrompt(traces: Trace[], current: Policy): string`
-  - `parsePolicyProposal(raw: string): { rules: Policy["rules"]; notes: string }` — parses a fenced ```json block.
-  - `reflect(baseDir: string, reflector: string, traceLimit: number, deps: ReflectDeps): Promise<Policy>`
-
-- [ ] **Step 1: Write the failing test**
-
-```ts
-// src/coordinator/reflect.test.ts
-import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
-import { mkdtempSync, rmSync } from "node:fs";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
-import { parsePolicyProposal, reflect, type ReflectDeps } from "./reflect.js";
-import { writeTrace, readPolicy } from "./memory.js";
-import type { Trace } from "./types.js";
-import type { SpawnResult } from "../types.js";
-
-let dir: string;
-beforeEach(() => { dir = mkdtempSync(join(tmpdir(), "vault-")); });
-afterEach(() => { rmSync(dir, { recursive: true, force: true }); });
-
-const trace = (id: string): Trace => ({
-  id, task: "typescript bug " + id, taskTags: ["typescript"], turns: [],
-  accepted: true, score: 1, createdAt: "2026-06-23T00:00:00.000Z",
-});
-
-describe("reflect", () => {
-  it("parsePolicyProposal reads a fenced json block", () => {
-    const raw = 'noise\n```json\n{"rules":[{"when":"ts","forRole":"worker","preferProfile":"coder","rationale":"r"}],"notes":"n"}\n```\n';
-    const got = parsePolicyProposal(raw);
-    expect(got.rules[0].preferProfile).toBe("coder");
-    expect(got.notes).toBe("n");
-  });
-
-  it("reflect writes a new policy with version bumped", async () => {
-    writeTrace(trace("a"), dir);
-    const proposal = '```json\n{"rules":[{"when":"typescript","forRole":"worker","preferProfile":"coder","rationale":"wins"}],"notes":"learned"}\n```';
-    const deps: ReflectDeps = {
-      spawn: vi.fn(async (): Promise<SpawnResult> => ({
-        status: "ok", exitCode: 0, outputPath: "/out/reflector", profile: "reflector", model: "m", durationMs: 1,
-      })),
-      readOutput: () => proposal,
-      outputPathFor: (p) => `/out/${p}`,
-      now: () => "2026-06-23T12:00:00.000Z",
-    };
-    const updated = await reflect(dir, "reflector", 20, deps);
-    expect(updated.version).toBe(1);
-    expect(updated.rules[0].preferProfile).toBe("coder");
-    expect(readPolicy(dir).version).toBe(1); // persisted
-  });
-});
-```
-
-- [ ] **Step 2: Run test to verify it fails**
-
-Run: `npm test -- src/coordinator/reflect.test.ts`
-Expected: FAIL — `Cannot find module './reflect.js'`.
-
-- [ ] **Step 3: Write minimal implementation**
-
-```ts
-// src/coordinator/reflect.ts
-import { readRecentTraces, readPolicy, writePolicy } from "./memory.js";
-import type { Policy, Trace } from "./types.js";
-import type { SpawnResult } from "../types.js";
-
-export interface ReflectDeps {
-  spawn: (profile: string, prompt: string, outputPath: string) => Promise<SpawnResult>;
-  readOutput: (path: string) => string;
-  outputPathFor: (profile: string, turnIndex: number) => string;
-  now: () => string;
-}
-
-export function buildReflectionPrompt(traces: Trace[], current: Policy): string {
-  const summary = traces
-    .map(
-      (t) =>
-        `- [${t.accepted ? "ACCEPT" : "FAIL"}, score=${t.score ?? "?"}] tags=${t.taskTags.join(",")} :: ${t.task}`,
-    )
-    .join("\n");
-  const currentRules = JSON.stringify(current.rules, null, 2);
-  return [
-    "You are the REFLECTOR. You evolve the coordinator's routing policy from past runs.",
-    "Diagnose patterns: which profile/role choices led to ACCEPT and high scores for which task tags.",
-    "Propose an improved, MINIMAL set of routing rules. Keep rules that still hold; drop or fix the rest.",
-    "Output ONLY a fenced ```json block of the shape:",
-    '{"rules":[{"when":"<lowercase task substring/tag>","forRole":"thinker|worker|verifier","preferProfile":"<profile name>","rationale":"<short why>"}],"notes":"<one-paragraph summary of what you learned>"}',
-    `\n## Current policy rules\n${currentRules}`,
-    `\n## Recent runs (newest first)\n${summary}`,
-  ].join("\n");
-}
-
-export function parsePolicyProposal(raw: string): { rules: Policy["rules"]; notes: string } {
-  const m = raw.match(/```json\s*([\s\S]*?)```/);
-  const jsonText = m ? m[1] : raw;
-  try {
-    const parsed = JSON.parse(jsonText) as { rules?: Policy["rules"]; notes?: string };
-    return { rules: parsed.rules ?? [], notes: parsed.notes ?? "" };
-  } catch {
-    return { rules: [], notes: "" };
-  }
-}
-
-export async function reflect(
-  baseDir: string,
-  reflector: string,
-  traceLimit: number,
-  deps: ReflectDeps,
-): Promise<Policy> {
-  const traces = readRecentTraces(baseDir, traceLimit);
-  const current = readPolicy(baseDir);
-
-  const prompt = buildReflectionPrompt(traces, current);
-  const outputPath = deps.outputPathFor(reflector, 0);
-  const result = await deps.spawn(reflector, prompt, outputPath);
-  const raw = result.status === "ok" ? deps.readOutput(result.outputPath) : "";
-  const { rules, notes } = parsePolicyProposal(raw);
-
-  const updated: Policy = {
-    version: current.version + 1,
-    rules,
-    notes,
-    updatedAt: deps.now(),
-  };
-  writePolicy(updated, baseDir);
-  return updated;
-}
-```
-
-- [ ] **Step 4: Run test to verify it passes**
-
-Run: `npm test -- src/coordinator/reflect.test.ts`
-Expected: PASS (2 tests).
-
-- [ ] **Step 5: Commit**
-
-```bash
-git add src/coordinator/reflect.ts src/coordinator/reflect.test.ts
-git commit -m "feat(coordinator): reflection loop that evolves policy from traces"
-```
-
----
-
-### Task 10: Wire real spawn/IO and expose MCP tools
-
-**Files:**
-- Create: `src/coordinator/runtime.ts` (adapters binding `CoordinatorDeps`/`ReflectDeps` to the real `spawnAgent`, output files, and `loadMergedConfig`)
-- Create: `src/coordinator/index.ts` (barrel)
-- Modify: `src/index.ts` (register `coordinate` and `reflect_policy` MCP tools)
-- Test: `src/coordinator/runtime.test.ts`
-
-**Interfaces:**
-- Consumes: `spawnAgent` (`../spawner.js`), `loadMergedConfig` (`../config.js`), `coordinate`, `mixtureOfAgents`, `reflect`, `buildTrace`, `writeTrace`, `readPolicy`, `resolveVaultDir`, `kbExtraArgs`, `kbPreamble`.
-- Produces:
-  - `makeCoordinatorDeps(opts: { projectDir: string; vaultDir: string; outputDir: string }): CoordinatorDeps`
-  - `runCoordination(req, opts): Promise<CoordinationResult>` — full path: load policy → coordinate → buildTrace → writeTrace.
-  - `runReflection(opts): Promise<Policy>`
-
-- [ ] **Step 1: Write the failing test** (adapter wiring, still DI for spawn)
-
-```ts
-// src/coordinator/runtime.test.ts
-import { describe, it, expect, vi } from "vitest";
-import { makeCoordinatorDeps } from "./runtime.js";
-
-describe("runtime adapters", () => {
-  it("outputPathFor produces unique paths per profile+turn under the output dir", () => {
-    const deps = makeCoordinatorDeps({
-      projectDir: "/proj", vaultDir: "/vault", outputDir: "/out",
-      spawnImpl: vi.fn(), readImpl: () => "",
-    });
-    const a = deps.outputPathFor("coder", 1);
-    const b = deps.outputPathFor("coder", 2);
-    expect(a).not.toBe(b);
-    expect(a.startsWith("/out/")).toBe(true);
-  });
-});
-```
-
-- [ ] **Step 2: Run test to verify it fails**
-
-Run: `npm test -- src/coordinator/runtime.test.ts`
-Expected: FAIL — `Cannot find module './runtime.js'`.
-
-- [ ] **Step 3: Write minimal implementation**
-
-```ts
-// src/coordinator/runtime.ts
-import { join } from "node:path";
-import { readFileSync, existsSync } from "node:fs";
-import { spawnAgent } from "../spawner.js";
-import { loadMergedConfig } from "../config.js";
-import { coordinate, type CoordinatorDeps } from "./coordinate.js";
-import { reflect, type ReflectDeps } from "./reflect.js";
-import { readPolicy, writeTrace, resolveVaultDir } from "./memory.js";
-import { buildTrace } from "./trace.js";
-import { kbExtraArgs, kbPreamble } from "./knowledge.js";
-import type { CoordinationRequest, CoordinationResult, Policy } from "./types.js";
-import type { SpawnResult } from "../types.js";
-
-export interface RuntimeOpts {
-  projectDir: string;
-  vaultDir: string;
-  outputDir: string;
-  /** test seam: override the real spawn */
-  spawnImpl?: (profile: string, prompt: string, outputPath: string, cwd?: string) => Promise<SpawnResult>;
-  /** test seam: override file read */
-  readImpl?: (path: string) => string;
-}
-
-function realRead(path: string): string {
-  return existsSync(path) ? readFileSync(path, "utf-8") : "";
-}
-
-export function makeCoordinatorDeps(opts: RuntimeOpts): CoordinatorDeps {
-  const config = opts.spawnImpl ? null : loadMergedConfig(opts.projectDir);
-  const policy = readPolicy(opts.vaultDir);
-  const preamble = kbPreamble(policy);
-  const kbArgs = kbExtraArgs(opts.vaultDir);
-
-  const realSpawn = async (
-    profile: string, prompt: string, outputPath: string, cwd?: string,
-  ): Promise<SpawnResult> => {
-    const p = config!.profiles[profile];
-    if (!p) {
-      return { status: "error", exitCode: 1, outputPath, profile, model: "unknown", durationMs: 0 };
-    }
-    // KB sharing: prepend policy preamble; expose vault via --add-dir for claude-p.
-    const enriched = `${preamble}\n\n${prompt}`;
-    const extra = p.invocation === "claude-p" ? kbArgs : undefined;
-    return spawnAgent(p, profile, enriched, outputPath, extra, cwd);
-  };
-
-  return {
-    spawn: opts.spawnImpl ?? realSpawn,
-    readOutput: opts.readImpl ?? realRead,
-    outputPathFor: (profile, turnIndex) =>
-      join(opts.outputDir, `${profile}-${turnIndex}.md`),
-    policy,
-    now: () => new Date().toISOString(),
-  };
-}
-
-export async function runCoordination(
-  req: CoordinationRequest,
-  opts: RuntimeOpts,
-): Promise<CoordinationResult> {
-  const deps = makeCoordinatorDeps(opts);
-  const result = await coordinate(req, deps);
-  const trace = buildTrace(req.task, result, new Date().toISOString());
-  writeTrace(trace, opts.vaultDir);
-  return result;
-}
-
-export async function runReflection(opts: RuntimeOpts & { reflector: string; traceLimit: number }): Promise<Policy> {
-  const base = makeCoordinatorDeps(opts);
-  const deps: ReflectDeps = {
-    spawn: base.spawn as ReflectDeps["spawn"],
-    readOutput: base.readOutput,
-    outputPathFor: base.outputPathFor,
-    now: () => new Date().toISOString(),
-  };
-  return reflect(opts.vaultDir, opts.reflector, opts.traceLimit, deps);
-}
-
-export { resolveVaultDir };
-```
-
-```ts
-// src/coordinator/index.ts
-export * from "./types.js";
-export { coordinate } from "./coordinate.js";
-export { mixtureOfAgents } from "./moa.js";
-export { reflect } from "./reflect.js";
-export { runCoordination, runReflection, resolveVaultDir } from "./runtime.js";
-```
-
-- [ ] **Step 4: Register MCP tools in `src/index.ts`**
-
-Use the repo's real registration API — `server.registerTool(name, { title, description, inputSchema: z.object({...}) }, handler)` — verified against the existing `spawn_agent`/`suggest_profile` tools (`src/index.ts:165, 328`). `z` is imported as `import * as z from "zod"` (already at the top of the file). All content items use `type: "text" as const`. Add the import and the two `registerTool` blocks alongside the existing ones:
-
-```ts
-// in src/index.ts — add to the import block at the top
-import { runCoordination, runReflection, resolveVaultDir } from "./coordinator/index.js";
-
-// register alongside the other server.registerTool(...) calls:
-server.registerTool(
-  "coordinate",
-  {
-    title: "Coordinate",
-    description:
-      "Run a Thinker/Worker/Verifier coordination over a pool of provider-agent profiles; logs a trace to the Obsidian vault.",
-    inputSchema: z.object({
-      task: z.string().describe("The task to coordinate over"),
-      pool: z.array(z.string()).min(1).describe("Candidate profile names the coordinator may route to"),
-      maxTurns: z.number().int().min(1).max(10).optional().describe("Hard cap on turns (default 5)"),
-      moa: z.boolean().optional().describe("Run the worker step as a Mixture-of-Agents fan-out"),
-      cwd: z.string().optional().describe("Working directory for spawned agents"),
-    }),
-  },
-  async ({ task, pool, maxTurns, moa, cwd }) => {
-    const projectDir = process.cwd();
-    const vaultDir = resolveVaultDir();
-    const outputDir = "/tmp/provider-agents/coordinator";
-    const result = await runCoordination(
-      { task, pool, maxTurns, moa, cwd },
-      { projectDir, vaultDir, outputDir },
-    );
-    return {
-      content: [
-        { type: "text" as const, text: result.answer },
-        {
-          type: "text" as const,
-          text: `\n\n---\naccepted=${result.accepted} turns=${result.turns.length} trace=${result.traceId}`,
-        },
-      ],
-      isError: !result.accepted,
-    };
-  },
-);
-
-server.registerTool(
-  "reflect_policy",
-  {
-    title: "Reflect Policy",
-    description:
-      "Read recent coordination traces and evolve the routing policy note in the Obsidian vault.",
-    inputSchema: z.object({
-      reflector: z.string().default("reflector").describe("Profile name used for reflection"),
-      traceLimit: z.number().int().min(1).max(200).default(30).describe("How many recent traces to reflect over"),
-    }),
-  },
-  async ({ reflector, traceLimit }) => {
-    const vaultDir = resolveVaultDir();
-    const policy = await runReflection({
-      projectDir: process.cwd(),
-      vaultDir,
-      outputDir: "/tmp/provider-agents/coordinator",
-      reflector,
-      traceLimit,
-    });
-    return {
-      content: [
-        { type: "text" as const, text: `Policy updated to v${policy.version} with ${policy.rules.length} rules.` },
-      ],
-    };
-  },
-);
-```
-
-- [ ] **Step 5: Run typecheck, tests, and build**
-
-Run: `npm run typecheck && npm test && npm run build`
-Expected: typecheck clean; all coordinator tests PASS; build emits `build/index.js`.
-
-- [ ] **Step 6: Commit**
-
-```bash
-git add src/coordinator/runtime.ts src/coordinator/index.ts src/index.ts
-git commit -m "feat(coordinator): runtime adapters + coordinate/reflect_policy MCP tools"
-```
-
----
-
-### Task 11: Coordinator profiles + Obsidian MCP wiring (in `deepclaude`)
-
-**Files (in `/home/samuel/Documentos/blis/repos/deepclaude`):**
-- Create: `.claude/obsidian.mcp.json`
-- Modify: `.claude/profiles.yaml` (append role profiles)
-
-**Interfaces:**
-- Consumes: nothing in code — these are config the coordinator routes to by name (`thinker`, `worker`, `verifier`, `aggregator`, `reflector`).
-- Produces: profile names the coordinator's `DEFAULT_FALLBACK` and pools reference.
-
-- [ ] **Step 1: Create the Obsidian MCP config (opt-in, token from env)**
-
-```json
-// .claude/obsidian.mcp.json
-{
-  "mcpServers": {
-    "obsidian": {
-      "type": "http",
-      "url": "http://127.0.0.1:3010/mcp",
-      "headers": { "Authorization": "Bearer ${OBSIDIAN_MCP_TOKEN}" }
-    }
-  }
-}
-```
-
-> The URL/port must match the `mcp-tools-istefox` "MCP Connector" plugin settings in the vault; `OBSIDIAN_MCP_TOKEN` is sourced from `.env` by `scripts/spawn.sh` (it `source`s `$PROJECT_DIR/.env`). NEVER hardcode the token. This file is only consumed by `claude-p` profiles via `mcp_config`.
-
-- [ ] **Step 2: Append role profiles to `.claude/profiles.yaml`**
-
-Add under `profiles:` (claude-p roles get the Obsidian MCP; the worker stays a strong coder). Reuse existing credential JSONs already referenced in the file:
+- [ ] **Step 1:** Append generator profiles (mirror the existing `openrouter-*` shape at `profiles.yaml:529-632`). Curate ~8 DIVERSE models (different families → diversity is the fuel): keep `openrouter-coder` (nex-n2-pro), `openrouter-reviewer` (laguna-m.1), `openrouter-reasoning` (nemotron-550b), and add e.g. `gen-qwen` (`qwen/qwen3.5-coder:free` or current), `gen-llama` (`meta-llama/llama-4-maverick:free`), `gen-deepseek-free` (`deepseek/deepseek-r1:free`), `gen-glm` (`z-ai/glm-4.6:free`), `gen-mistral` (`mistralai/...:free`). Each:
 
 ```yaml
-  thinker:
-    invocation: claude-p
-    settings: /home/samuel/Documentos/blis/repos/deepclaude/.claude/deepseek.json
-    model: deepseek-v4-pro[1m]
-    bare: true
-    tags: [coordinator, thinker, plan, decompose]
-    mcp_config: [/home/samuel/Documentos/blis/repos/deepclaude/.claude/obsidian.mcp.json]
+  gen-qwen:
+    invocation: cli
+    command: openrouter-agent
+    model: qwen/qwen3.5-coder:free
+    stdin: false
+    tags: [generator, free, code]
     system_prompt: |-
-      You are the THINKER in a multi-agent coordinator. Respond in Portuguese (pt-BR).
-      Decompose tasks into a concrete plan; do not produce the final solution.
-      Read the shared knowledge base (Obsidian) when it helps. Separate verified facts from hypotheses.
-      Never print, echo or log secrets.
-    description: Coordinator THINKER. DeepSeek Pro, decomposição e estratégia, com KB Obsidian.
-
-  worker:
-    invocation: claude-p
-    settings: /home/samuel/Documentos/blis/repos/deepclaude/.claude/deepseek.json
-    model: deepseek-v4-pro[1m]
-    bare: true
-    tags: [coordinator, worker, implement]
-    mcp_config: [/home/samuel/Documentos/blis/repos/deepclaude/.claude/obsidian.mcp.json]
-    system_prompt: |-
-      You are the WORKER in a multi-agent coordinator. Respond in Portuguese (pt-BR).
-      Execute the plan and produce the concrete solution. Every claim needs evidence (file:line or output).
-      Never print, echo or log secrets.
-    description: Coordinator WORKER. DeepSeek Pro, execução concreta, com KB Obsidian.
-
-  verifier:
-    invocation: claude-p
-    settings: /home/samuel/Documentos/blis/repos/deepclaude/.claude/deepseek.json
-    model: deepseek-v4-pro[1m]
-    bare: true
-    tags: [coordinator, verifier, check]
-    mcp_config: [/home/samuel/Documentos/blis/repos/deepclaude/.claude/obsidian.mcp.json]
-    system_prompt: |-
-      You are the VERIFIER in a multi-agent coordinator. Respond in Portuguese (pt-BR).
-      Check the latest solution for correctness and completeness. End with exactly one token: ACCEPT or REVISE.
-      Never print, echo or log secrets.
-    description: Coordinator VERIFIER. DeepSeek Pro, checagem ACCEPT/REVISE, com KB Obsidian.
-
-  aggregator:
-    invocation: claude-p
-    settings: /home/samuel/Documentos/blis/repos/deepclaude/.claude/kimi.json
-    model: kimi-k2.6
-    bare: true
-    tags: [coordinator, aggregator, synthesis]
-    mcp_config: [/home/samuel/Documentos/blis/repos/deepclaude/.claude/obsidian.mcp.json]
-    system_prompt: |-
-      You are the AGGREGATOR. Respond in Portuguese (pt-BR). Synthesize multiple proposals into one best answer,
-      keeping what is correct and discarding what is wrong. Never print, echo or log secrets.
-    description: Coordinator AGGREGATOR. Kimi K2.6 (long-context), síntese MoA.
-
-  reflector:
-    invocation: claude-p
-    settings: /home/samuel/Documentos/blis/repos/deepclaude/.claude/deepseek.json
-    model: deepseek-v4-pro[1m]
-    bare: true
-    tags: [coordinator, reflector, policy]
-    mcp_config: [/home/samuel/Documentos/blis/repos/deepclaude/.claude/obsidian.mcp.json]
-    system_prompt: |-
-      You are the REFLECTOR. Respond with ONLY a fenced json block as instructed.
-      You evolve the coordinator routing policy from past traces. Never print, echo or log secrets.
-    description: Coordinator REFLECTOR. DeepSeek Pro, evolui a política a partir de traces.
+      You are a GENERATOR. Produce your single best, complete, independent solution to the task.
+      Respond in Portuguese (pt-BR); code/identifiers in English. Never log secrets.
+    args: [--raw, --no-thinking-stdout]
+    timeout: 300
+    description: Generator FREE (Qwen3.5 Coder). Diverse ensemble member.
 ```
 
-- [ ] **Step 3: Validate the profiles parse**
+> The implementer MUST verify each model id exists on OpenRouter today (`openrouter-agent --help` / the OpenRouter models list) and is `:free`; substitute the closest current `:free` model if an id is stale, and record the final list in the report. Do NOT invent model ids.
 
-Run: `bash /home/samuel/Documentos/blis/repos/deepclaude/scripts/spawn.sh` (no args)
-Expected: the profile list prints and includes `thinker`, `worker`, `verifier`, `aggregator`, `reflector` with no YAML error.
+- [ ] **Step 2: Validate parse** `bash /home/samuel/Documentos/blis/repos/deepclaude/scripts/spawn.sh` → list includes the new `gen-*` profiles, no YAML error.
+- [ ] **Step 3:** No git commit (not a repo). Record the final curated pool in the task report.
 
-- [ ] **Step 4: Commit (in the deepclaude repo)**
+### Task 6: Generator layer (ensemble + best-of-N)
 
-```bash
-git -C /home/samuel/Documentos/blis/repos/deepclaude add .claude/obsidian.mcp.json .claude/profiles.yaml
-git -C /home/samuel/Documentos/blis/repos/deepclaude commit -m "feat(profiles): coordinator roles with shared Obsidian knowledge base"
-```
-
----
-
-## Milestone M4 — Proving "≥ Sakana" (eval harness)
-
-### Task 12: LLM-judge metric
-
-**Files:**
-- Create: `eval/judge.ts`
-- Test: `eval/judge.test.ts`
+**Files:** Create `src/archon/layers/generator.ts`; Test `src/archon/layers/generator.test.ts`.
 
 **Interfaces:**
-- Produces:
-  - `buildJudgePrompt(task: string, answer: string, reference: string): string`
-  - `parseScore(raw: string): number` — extracts a 0–1 score from a `SCORE: x` line.
-  - `judge(task, answer, reference, deps): Promise<number>`
+- Consumes: `Candidate`, `EngineDeps` from `../types.js`.
+- Produces: `generate(task: string, profiles: string[], samples: number, deps: EngineDeps): Promise<Candidate[]>` — spawns each (profile × sample) concurrently; one `Candidate` per non-empty output, `id = "<profile>#<sample>"`.
 
-- [ ] **Step 1: Write the failing test**
-
+First add to `src/archon/types.ts` (Task 6 implementer extends it):
 ```ts
-// eval/judge.test.ts
+export interface Candidate { id: string; text: string; fromProfile: string; score?: number; critique?: string; }
+export type LayerKind = "generator" | "fuser" | "critic" | "ranker" | "verifier" | "unittest";
+export interface LayerConfig { kind: LayerKind; profiles?: string[]; samples?: number; topK?: number; }
+export interface ArchitectureSpec { name: string; layers: LayerConfig[]; }
+export interface EngineDeps {
+  spawn: (profile: string, prompt: string, outputPath: string, cwd?: string) => Promise<import("../../types.js").SpawnResult>;
+  readOutput: (path: string) => string;
+  outputPathFor: (label: string) => string;
+}
+```
+
+- [ ] **Step 1: Failing test**
+```ts
+// src/archon/layers/generator.test.ts
 import { describe, it, expect, vi } from "vitest";
-import { parseScore, buildJudgePrompt, judge } from "./judge.js";
+import { generate } from "./generator.js";
+import type { EngineDeps } from "../types.js";
+import type { SpawnResult } from "../../types.js";
 
-describe("judge", () => {
-  it("parseScore reads SCORE line, clamps to [0,1]", () => {
-    expect(parseScore("reasoning...\nSCORE: 0.8")).toBe(0.8);
-    expect(parseScore("SCORE: 5")).toBe(1);
-    expect(parseScore("no score")).toBe(0);
-  });
-
-  it("buildJudgePrompt includes task, answer and reference", () => {
-    const p = buildJudgePrompt("T", "A", "R");
-    expect(p).toContain("T"); expect(p).toContain("A"); expect(p).toContain("R");
-  });
-
-  it("judge returns the parsed score from the judge agent output", async () => {
-    const deps = { run: vi.fn(async () => "SCORE: 0.9") };
-    expect(await judge("t", "a", "r", deps)).toBe(0.9);
-  });
-});
-```
-
-- [ ] **Step 2: Run test to verify it fails**
-
-Run: `npm test -- eval/judge.test.ts`
-Expected: FAIL — `Cannot find module './judge.js'`.
-
-> Vitest must include `eval/`. If `vitest.config.ts` restricts `include` to `src/`, add `"eval/**/*.test.ts"` to the `include` array in the same step.
-
-- [ ] **Step 3: Write minimal implementation**
-
-```ts
-// eval/judge.ts
-export interface JudgeDeps {
-  run: (prompt: string) => Promise<string>;
-}
-
-export function buildJudgePrompt(task: string, answer: string, reference: string): string {
-  return [
-    "You are an impartial grader. Compare the ANSWER to the REFERENCE for the TASK.",
-    "Score correctness and completeness from 0.0 to 1.0. End with a line: SCORE: <number>.",
-    `\n## Task\n${task}`,
-    `\n## Reference\n${reference}`,
-    `\n## Answer\n${answer}`,
-  ].join("\n");
-}
-
-export function parseScore(raw: string): number {
-  const m = raw.match(/SCORE:\s*([0-9]*\.?[0-9]+)/i);
-  if (!m) return 0;
-  const n = Number(m[1]);
-  if (Number.isNaN(n)) return 0;
-  return Math.max(0, Math.min(1, n));
-}
-
-export async function judge(
-  task: string,
-  answer: string,
-  reference: string,
-  deps: JudgeDeps,
-): Promise<number> {
-  const raw = await deps.run(buildJudgePrompt(task, answer, reference));
-  return parseScore(raw);
-}
-```
-
-- [ ] **Step 4: Run test to verify it passes**
-
-Run: `npm test -- eval/judge.test.ts`
-Expected: PASS (3 tests).
-
-- [ ] **Step 5: Commit**
-
-```bash
-git add eval/judge.ts eval/judge.test.ts vitest.config.ts
-git commit -m "feat(eval): LLM-judge metric for coordinator answers"
-```
-
----
-
-### Task 13: Eval runner (baseline vs coordinator) + dataset
-
-**Files:**
-- Create: `eval/tasks/ours.jsonl` (seed with 5 real tasks; each line `{ "task": "...", "reference": "...", "pool": ["analyst","coder","reviewer"] }`)
-- Create: `eval/run-eval.ts`
-- Test: `eval/run-eval.test.ts`
-
-**Interfaces:**
-- Consumes: `runCoordination` (`../src/coordinator/index.js`), `judge` (`./judge.js`), `spawnAgent` for the single-agent baseline.
-- Produces:
-  - `loadTasks(path: string): EvalTask[]`
-  - `summarize(rows: EvalRow[]): { baselineMean: number; coordMean: number; wins: number; n: number }`
-  - `main()` — CLI entry that prints the report.
-
-- [ ] **Step 1: Write the failing test (pure logic: loading + summary)**
-
-```ts
-// eval/run-eval.test.ts
-import { describe, it, expect } from "vitest";
-import { summarize, type EvalRow } from "./run-eval.js";
-
-describe("eval summary", () => {
-  it("computes means, win count and n", () => {
-    const rows: EvalRow[] = [
-      { task: "a", baseline: 0.5, coord: 0.9 },
-      { task: "b", baseline: 0.8, coord: 0.8 },
-      { task: "c", baseline: 0.6, coord: 0.4 },
-    ];
-    const s = summarize(rows);
-    expect(s.n).toBe(3);
-    expect(s.wins).toBe(1); // only "a" strictly improved
-    expect(Number(s.coordMean.toFixed(2))).toBe(0.7);
-    expect(Number(s.baselineMean.toFixed(2))).toBe(0.63);
-  });
-});
-```
-
-- [ ] **Step 2: Run test to verify it fails**
-
-Run: `npm test -- eval/run-eval.test.ts`
-Expected: FAIL — `Cannot find module './run-eval.js'`.
-
-- [ ] **Step 3: Write minimal implementation**
-
-```ts
-// eval/run-eval.ts
-import { readFileSync } from "node:fs";
-import { runCoordination, resolveVaultDir } from "../src/coordinator/index.js";
-import { spawnAgent } from "../src/spawner.js";
-import { loadMergedConfig } from "../src/config.js";
-import { judge } from "./judge.js";
-
-export interface EvalTask { task: string; reference: string; pool: string[]; }
-export interface EvalRow { task: string; baseline: number; coord: number; }
-
-export function loadTasks(path: string): EvalTask[] {
-  return readFileSync(path, "utf-8")
-    .split("\n")
-    .filter((l) => l.trim().length > 0)
-    .map((l) => JSON.parse(l) as EvalTask);
-}
-
-export function summarize(rows: EvalRow[]) {
-  const n = rows.length;
-  const baselineMean = rows.reduce((a, r) => a + r.baseline, 0) / n;
-  const coordMean = rows.reduce((a, r) => a + r.coord, 0) / n;
-  const wins = rows.filter((r) => r.coord > r.baseline).length;
-  return { baselineMean, coordMean, wins, n };
-}
-
-// --- CLI entry (not unit-tested; runs real agents) ---
-export async function main(): Promise<void> {
-  const tasksPath = process.argv[2] ?? "eval/tasks/ours.jsonl";
-  const tasks = loadTasks(tasksPath);
-  const vaultDir = resolveVaultDir();
-  const projectDir = process.cwd();
-  const outputDir = "/tmp/provider-agents/eval";
-  const config = loadMergedConfig(projectDir);
-
-  const judgeRun = async (prompt: string): Promise<string> => {
-    const out = `/tmp/provider-agents/eval/judge-${Date.now()}.md`;
-    const p = config.profiles["analyst"];
-    const r = await spawnAgent(p, "analyst", prompt, out);
-    return r.status === "ok" ? readFileSync(r.outputPath, "utf-8") : "";
-  };
-
-  const rows: EvalRow[] = [];
-  for (const t of tasks) {
-    // baseline = single strongest worker
-    const baseOut = `/tmp/provider-agents/eval/base-${Date.now()}.md`;
-    const baseProfile = config.profiles[t.pool[1] ?? t.pool[0]];
-    const baseRes = await spawnAgent(baseProfile, t.pool[1] ?? t.pool[0], t.task, baseOut);
-    const baseAnswer = baseRes.status === "ok" ? readFileSync(baseRes.outputPath, "utf-8") : "";
-
-    const coord = await runCoordination(
-      { task: t.task, pool: t.pool }, { projectDir, vaultDir, outputDir },
-    );
-
-    rows.push({
-      task: t.task,
-      baseline: await judge(t.task, baseAnswer, t.reference, { run: judgeRun }),
-      coord: await judge(t.task, coord.answer, t.reference, { run: judgeRun }),
-    });
-  }
-
-  const s = summarize(rows);
-  console.log(JSON.stringify({ rows, summary: s }, null, 2));
-}
-
-// Run only when invoked directly.
-if (import.meta.url === `file://${process.argv[1]}`) {
-  main().catch((e) => { console.error(e); process.exit(1); });
-}
-```
-
-- [ ] **Step 4: Seed the dataset**
-
-Create `eval/tasks/ours.jsonl` with 5 real, gradeable tasks from our domain (code review with a known bug, an RCA with a known root cause, a refactor with a known dead-export, a TS type-safety fix, a SQL correctness fix). Each line:
-
-```json
-{"task": "Review src/lib/db.ts for connection-leak bugs and report file:line.", "reference": "The pool is created per-request and never closed; fix is a module-level singleton.", "pool": ["analyst", "coder", "reviewer"]}
-```
-
-(Add four more analogous lines covering RCA, refactor, TS, SQL.)
-
-- [ ] **Step 5: Run test, then a live smoke eval**
-
-Run: `npm test -- eval/run-eval.test.ts`
-Expected: PASS (1 test).
-
-Run (live, optional, needs agents): `npx tsx eval/run-eval.ts eval/tasks/ours.jsonl`
-Expected: JSON report with `summary.coordMean >= summary.baselineMean` as the success bar; `wins` and per-row scores printed.
-
-- [ ] **Step 6: Commit**
-
-```bash
-git add eval/run-eval.ts eval/run-eval.test.ts eval/tasks/ours.jsonl
-git commit -m "feat(eval): baseline-vs-coordinator runner with judged scoring"
-```
-
----
-
-### Task 14: Public-benchmark adapter (LiveCodeBench-style)
-
-**Files:**
-- Create: `eval/public/livecodebench.ts`
-- Test: `eval/public/livecodebench.test.ts`
-
-**Interfaces:**
-- Produces:
-  - `extractCode(answer: string): string` — pull the final fenced code block from an answer.
-  - `passAtOne(testResults: boolean[]): number` — 1 if all unit checks pass, else 0.
-  - `toEvalTask(problem: { prompt: string; canonical: string }): EvalTask` — adapt a public problem into our `EvalTask` shape so `run-eval`/judge can score code by executing provided unit tests rather than the LLM-judge.
-
-> This adapter makes the public-benchmark numbers apples-to-apples with Sakana (they report LiveCodeBench/GPQA). Code answers are graded by **executing the benchmark's own unit tests** (objective pass@1), NOT the LLM-judge. Wire actual dataset download + sandboxed execution as the live path; the unit test here covers the pure adapter logic only.
-
-- [ ] **Step 1: Write the failing test**
-
-```ts
-// eval/public/livecodebench.test.ts
-import { describe, it, expect } from "vitest";
-import { extractCode, passAtOne } from "./livecodebench.js";
-
-describe("livecodebench adapter", () => {
-  it("extractCode returns the last fenced block body", () => {
-    const a = "intro\n```python\nx=1\n```\nmid\n```python\nprint(42)\n```";
-    expect(extractCode(a)).toBe("print(42)");
-  });
-
-  it("passAtOne is 1 only when all checks pass", () => {
-    expect(passAtOne([true, true])).toBe(1);
-    expect(passAtOne([true, false])).toBe(0);
-    expect(passAtOne([])).toBe(0);
-  });
-});
-```
-
-- [ ] **Step 2: Run test to verify it fails**
-
-Run: `npm test -- eval/public/livecodebench.test.ts`
-Expected: FAIL — `Cannot find module './livecodebench.js'`.
-
-- [ ] **Step 3: Write minimal implementation**
-
-```ts
-// eval/public/livecodebench.ts
-import type { EvalTask } from "../run-eval.js";
-
-export function extractCode(answer: string): string {
-  const blocks = [...answer.matchAll(/```[a-zA-Z0-9]*\n([\s\S]*?)```/g)];
-  if (blocks.length === 0) return answer.trim();
-  return blocks[blocks.length - 1][1].trim();
-}
-
-export function passAtOne(testResults: boolean[]): number {
-  return testResults.length > 0 && testResults.every(Boolean) ? 1 : 0;
-}
-
-export function toEvalTask(problem: { prompt: string; canonical: string }): EvalTask {
+function deps(map: Record<string, string>): EngineDeps {
   return {
-    task: problem.prompt,
-    reference: problem.canonical,
-    pool: ["analyst", "coder", "reviewer"],
+    spawn: vi.fn(async (profile: string, _p: string, outputPath: string): Promise<SpawnResult> => ({
+      status: "ok", exitCode: 0, outputPath, profile, model: "m", durationMs: 1,
+    })),
+    readOutput: (p: string) => map[p] ?? "",
+    outputPathFor: (label: string) => `/out/${label}`,
   };
 }
+describe("generate", () => {
+  it("produces one candidate per profile×sample, dropping empties", async () => {
+    const d = deps({ "/out/a#0": "A0", "/out/b#0": "", "/out/a#1": "A1" });
+    const cs = await generate("t", ["a", "b"], 2, d);
+    expect(cs.map((c) => c.text).sort()).toEqual(["A0", "A1"]);
+    expect(cs.every((c) => c.fromProfile === "a")).toBe(true);
+    expect(d.spawn).toHaveBeenCalledTimes(4);
+  });
+});
 ```
+- [ ] **Step 2: FAIL.** `npm test -- src/archon/layers/generator.test.ts`
+- [ ] **Step 3: Implement**
+```ts
+// src/archon/layers/generator.ts
+import type { Candidate, EngineDeps } from "../types.js";
 
-- [ ] **Step 4: Run test to verify it passes**
+const GEN_BRIEF = "Produce your single best, complete, independent solution to the task.";
 
-Run: `npm test -- eval/public/livecodebench.test.ts`
-Expected: PASS (2 tests).
-
-- [ ] **Step 5: Commit**
-
-```bash
-git add eval/public/livecodebench.ts eval/public/livecodebench.test.ts
-git commit -m "feat(eval): public-benchmark adapter (code extraction + pass@1)"
+export async function generate(
+  task: string, profiles: string[], samples: number, deps: EngineDeps,
+): Promise<Candidate[]> {
+  const jobs: Promise<Candidate | null>[] = [];
+  for (const profile of profiles) {
+    for (let s = 0; s < samples; s++) {
+      const id = `${profile}#${s}`;
+      const outputPath = deps.outputPathFor(id);
+      jobs.push(
+        deps.spawn(profile, `${GEN_BRIEF}\n\n## Task\n${task}`, outputPath).then((r) => {
+          const text = r.status === "ok" ? deps.readOutput(r.outputPath).trim() : "";
+          return text ? { id, text, fromProfile: profile } : null;
+        }),
+      );
+    }
+  }
+  const settled = await Promise.all(jobs);
+  return settled.filter((c): c is Candidate => c !== null);
+}
 ```
+- [ ] **Step 4: PASS.** **Step 5: Commit** `feat(archon): generator layer (ensemble + best-of-N)`
+
+### Task 7: Fuser layer (MoA)
+
+**Files:** Create `src/archon/layers/fuser.ts` + test.
+**Interfaces:** `fuse(task, candidates, fuserProfile, deps): Promise<Candidate>` — one spawn; returns a single fused candidate (`id="fused"`).
+
+- [ ] **Step 1: Failing test** (one candidate out; aggregator sees all inputs)
+```ts
+import { describe, it, expect, vi } from "vitest";
+import { fuse } from "./fuser.js";
+import type { EngineDeps } from "../types.js";
+import type { SpawnResult } from "../../types.js";
+const deps = (out: string): EngineDeps => ({
+  spawn: vi.fn(async (p: string, _pr: string, outputPath: string): Promise<SpawnResult> => ({ status:"ok", exitCode:0, outputPath, profile:p, model:"m", durationMs:1 })),
+  readOutput: () => out, outputPathFor: (l) => `/out/${l}`,
+});
+describe("fuse", () => {
+  it("returns a single fused candidate", async () => {
+    const c = await fuse("t", [{ id:"a", text:"A", fromProfile:"x" }, { id:"b", text:"B", fromProfile:"y" }], "aggregator", deps("FUSED"));
+    expect(c.id).toBe("fused"); expect(c.text).toBe("FUSED"); expect(c.fromProfile).toBe("aggregator");
+  });
+});
+```
+- [ ] **Step 2-4:** FAIL → implement → PASS
+```ts
+// src/archon/layers/fuser.ts
+import type { Candidate, EngineDeps } from "../types.js";
+import { fuserPrompt } from "../roles.js";
+export async function fuse(
+  task: string, candidates: Candidate[], fuserProfile: string, deps: EngineDeps,
+): Promise<Candidate> {
+  const outputPath = deps.outputPathFor("fused");
+  const r = await deps.spawn(fuserProfile, fuserPrompt(task, candidates), outputPath);
+  const text = r.status === "ok" ? deps.readOutput(r.outputPath).trim() : "";
+  return { id: "fused", text, fromProfile: fuserProfile };
+}
+```
+- [ ] **Step 5: Commit** `feat(archon): fuser layer (mixture-of-agents synthesis)`
+
+### Task 8: Critic + Ranker layers
+
+**Files:** Create `src/archon/layers/critic.ts`, `src/archon/layers/ranker.ts` + tests.
+**Interfaces:** `critique(task, candidates, criticProfile, deps): Promise<Candidate[]>` (returns candidates with `.critique` filled); `rank(task, candidates, rankerProfile, topK, deps): Promise<Candidate[]>` (reorders by parsed id list, returns top-K; falls back to input order if parse fails). Add `parseIdRanking(raw, validIds): string[]`.
+
+- [ ] **Step 1: Failing tests** (critic annotates; ranker reorders + topK; parse fallback)
+```ts
+// ranker.test.ts excerpt
+import { parseIdRanking } from "./ranker.js";
+it("parses a fenced json id array, keeping only valid ids", () => {
+  expect(parseIdRanking('```json\n["b","z","a"]\n```', ["a","b"])).toEqual(["b","a"]);
+  expect(parseIdRanking("garbage", ["a","b"])).toEqual([]);
+});
+```
+- [ ] **Step 3: Implement**
+```ts
+// src/archon/layers/critic.ts
+import type { Candidate, EngineDeps } from "../types.js";
+import { criticPrompt } from "../roles.js";
+export async function critique(task: string, candidates: Candidate[], criticProfile: string, deps: EngineDeps): Promise<Candidate[]> {
+  if (candidates.length === 0) return candidates;
+  const r = await deps.spawn(criticProfile, criticPrompt(task, candidates), deps.outputPathFor("critic"));
+  const text = r.status === "ok" ? deps.readOutput(r.outputPath) : "";
+  return candidates.map((c) => {
+    const line = text.split("\n").find((l) => l.includes(`id=${c.id}`));
+    return line ? { ...c, critique: line.trim() } : c;
+  });
+}
+```
+```ts
+// src/archon/layers/ranker.ts
+import type { Candidate, EngineDeps } from "../types.js";
+import { rankerPrompt } from "../roles.js";
+export function parseIdRanking(raw: string, validIds: string[]): string[] {
+  const m = raw.match(/```json\s*([\s\S]*?)```/);
+  try {
+    const arr = JSON.parse(m ? m[1] : raw) as unknown;
+    if (!Array.isArray(arr)) return [];
+    return arr.map(String).filter((id) => validIds.includes(id));
+  } catch { return []; }
+}
+export async function rank(task: string, candidates: Candidate[], rankerProfile: string, topK: number, deps: EngineDeps): Promise<Candidate[]> {
+  if (candidates.length <= 1) return candidates.slice(0, topK);
+  const critiques = candidates.map((c) => c.critique ?? "").join("\n");
+  const r = await deps.spawn(rankerProfile, rankerPrompt(task, candidates, critiques), deps.outputPathFor("ranker"));
+  const raw = r.status === "ok" ? deps.readOutput(r.outputPath) : "";
+  const order = parseIdRanking(raw, candidates.map((c) => c.id));
+  const byId = new Map(candidates.map((c) => [c.id, c]));
+  const ranked = order.map((id) => byId.get(id)!).filter(Boolean);
+  const rest = candidates.filter((c) => !order.includes(c.id));
+  return [...ranked, ...rest].slice(0, topK);
+}
+```
+- [ ] **Steps 2/4/5:** FAIL → PASS → Commit `feat(archon): critic and ranker layers`
+
+### Task 9: Verifier layer (multi-verifier vote)
+
+**Files:** Create `src/archon/layers/verifier.ts` + test.
+**Interfaces:** `verifyVote(task, candidate, verifierProfiles, deps): Promise<{ accepted: boolean; votes: Verdict[] }>` — spawn each verifier concurrently, ACCEPT iff majority ACCEPT (fail-closed on ties). `verifyBest(task, candidates, verifierProfiles, deps): Promise<Candidate>` — return the first candidate that passes the vote, else the first candidate.
+
+- [ ] **Step 1: Failing test**
+```ts
+import { describe, it, expect, vi } from "vitest";
+import { verifyVote } from "./verifier.js";
+import type { EngineDeps } from "../types.js";
+import type { SpawnResult } from "../../types.js";
+function deps(outs: string[]): EngineDeps {
+  const q = [...outs];
+  return { spawn: vi.fn(async (p:string,_x:string,outputPath:string):Promise<SpawnResult>=>({status:"ok",exitCode:0,outputPath,profile:p,model:"m",durationMs:1})),
+    readOutput: () => q.shift() ?? "REVISE", outputPathFor:(l)=>`/out/${l}` };
+}
+describe("verifyVote", () => {
+  it("accepts on majority ACCEPT, fails closed on tie", async () => {
+    expect((await verifyVote("t",{id:"a",text:"A",fromProfile:"x"},["v1","v2","v3"],deps(["ACCEPT","ACCEPT","REVISE"]))).accepted).toBe(true);
+    expect((await verifyVote("t",{id:"a",text:"A",fromProfile:"x"},["v1","v2"],deps(["ACCEPT","REVISE"]))).accepted).toBe(false);
+  });
+});
+```
+- [ ] **Step 3: Implement**
+```ts
+// src/archon/layers/verifier.ts
+import type { Candidate, EngineDeps, Verdict } from "../types.js";
+import { verifierPrompt, parseVerdict } from "../roles.js";
+export async function verifyVote(task: string, c: Candidate, verifierProfiles: string[], deps: EngineDeps): Promise<{ accepted: boolean; votes: Verdict[] }> {
+  const votes = await Promise.all(verifierProfiles.map(async (vp, i) => {
+    const r = await deps.spawn(vp, verifierPrompt(task, c), deps.outputPathFor(`verifier-${c.id}-${i}`));
+    return parseVerdict(r.status === "ok" ? deps.readOutput(r.outputPath) : "REVISE");
+  }));
+  const accept = votes.filter((v) => v === "ACCEPT").length;
+  return { accepted: accept * 2 > votes.length, votes };
+}
+export async function verifyBest(task: string, candidates: Candidate[], verifierProfiles: string[], deps: EngineDeps): Promise<Candidate> {
+  for (const c of candidates) {
+    const { accepted } = await verifyVote(task, c, verifierProfiles, deps);
+    if (accepted) return c;
+  }
+  return candidates[0];
+}
+```
+- [ ] **Steps 2/4/5:** FAIL → PASS → Commit `feat(archon): multi-verifier voting layer`
+
+### Task 10: Unit-test layer + sandbox (the code lever, +56%)
+
+**Files:** Create `src/archon/sandbox.ts`, `src/archon/layers/unittest.ts` + tests.
+**Interfaces:**
+- `extractCode(text): string` — last fenced block body.
+- `runInSandbox(files: Record<string,string>, cmd: string[], timeoutMs: number): Promise<{ ok: boolean; output: string }>` — write files to a fresh temp dir, run `cmd` with cwd=tempdir, no network env, hard timeout, kill tree, always cleanup.
+- `unitTestRank(task, candidates, testGenProfile, lang, deps, runner): Promise<Candidate[]>` — generate tests once, execute each candidate's code against them, set `c.score` = pass(1)/fail(0), return candidates sorted by score desc. `runner` is injected (DI) so unit tests don't execute real code.
+
+- [ ] **Step 1: Failing tests** (sandbox is integration-tested separately/lightly; unitTestRank uses an injected fake runner)
+```ts
+// src/archon/layers/unittest.test.ts
+import { describe, it, expect, vi } from "vitest";
+import { extractCode, unitTestRank } from "./unittest.js";
+import type { EngineDeps } from "../types.js";
+import type { SpawnResult } from "../../types.js";
+describe("unittest layer", () => {
+  it("extractCode returns the last fenced block", () => {
+    expect(extractCode("```py\nx=1\n```\n```py\nprint(2)\n```")).toBe("print(2)");
+  });
+  it("ranks candidates by injected runner pass/fail", async () => {
+    const deps: EngineDeps = {
+      spawn: vi.fn(async (p:string,_x:string,outputPath:string):Promise<SpawnResult>=>({status:"ok",exitCode:0,outputPath,profile:p,model:"m",durationMs:1})),
+      readOutput: () => "```python\n# tests\n```", outputPathFor:(l)=>`/out/${l}`,
+    };
+    const runner = vi.fn(async (_f:Record<string,string>) => ({ ok: false, output: "" }));
+    runner.mockResolvedValueOnce({ ok: true, output: "" }); // first candidate passes
+    const cs = [{ id:"a", text:"```python\ncodeA\n```", fromProfile:"x" }, { id:"b", text:"```python\ncodeB\n```", fromProfile:"y" }];
+    const ranked = await unitTestRank("t", cs, "tester", "python", deps, runner);
+    expect(ranked[0].id).toBe("a"); expect(ranked[0].score).toBe(1); expect(ranked[1].score).toBe(0);
+  });
+});
+```
+- [ ] **Step 3: Implement**
+```ts
+// src/archon/sandbox.ts
+import { mkdtempSync, writeFileSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { spawn } from "node:child_process";
+export async function runInSandbox(files: Record<string, string>, cmd: string[], timeoutMs: number): Promise<{ ok: boolean; output: string }> {
+  const dir = mkdtempSync(join(tmpdir(), "archon-sbx-"));
+  try {
+    for (const [name, content] of Object.entries(files)) writeFileSync(join(dir, name), content, "utf-8");
+    return await new Promise((resolve) => {
+      const child = spawn(cmd[0], cmd.slice(1), { cwd: dir, env: { PATH: process.env.PATH ?? "", HOME: dir }, stdio: ["ignore", "pipe", "pipe"] });
+      let out = ""; const timer = setTimeout(() => child.kill("SIGKILL"), timeoutMs);
+      child.stdout.on("data", (d) => (out += d)); child.stderr.on("data", (d) => (out += d));
+      child.on("close", (code) => { clearTimeout(timer); resolve({ ok: code === 0, output: out }); });
+      child.on("error", (e) => { clearTimeout(timer); resolve({ ok: false, output: String(e) }); });
+    });
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+}
+```
+```ts
+// src/archon/layers/unittest.ts
+import type { Candidate, EngineDeps } from "../types.js";
+import { unitTestPrompt } from "../roles.js";
+import { runInSandbox } from "../sandbox.js";
+export function extractCode(text: string): string {
+  const blocks = [...text.matchAll(/```[a-zA-Z0-9]*\n([\s\S]*?)```/g)];
+  return blocks.length ? blocks[blocks.length - 1][1].trim() : text.trim();
+}
+const RUN: Record<string, { test: string; sol: string; cmd: string[] }> = {
+  python: { test: "test_main.py", sol: "solution.py", cmd: ["python3", "-m", "pytest", "-q", "test_main.py"] },
+};
+export type Runner = (files: Record<string, string>) => Promise<{ ok: boolean; output: string }>;
+export async function unitTestRank(
+  task: string, candidates: Candidate[], testGenProfile: string, lang: string, deps: EngineDeps, runner: Runner = (f) => runInSandbox(f, RUN[lang].cmd, 20000),
+): Promise<Candidate[]> {
+  const cfg = RUN[lang];
+  if (!cfg || candidates.length === 0) return candidates;
+  const tg = await deps.spawn(testGenProfile, unitTestPrompt(task), deps.outputPathFor("unittest-gen"));
+  const tests = extractCode(tg.status === "ok" ? deps.readOutput(tg.outputPath) : "");
+  const scored = await Promise.all(candidates.map(async (c) => {
+    const { ok } = await runner({ [cfg.sol]: extractCode(c.text), [cfg.test]: tests });
+    return { ...c, score: ok ? 1 : 0 };
+  }));
+  return [...scored].sort((a, b) => (b.score ?? 0) - (a.score ?? 0));
+}
+```
+- [ ] **Steps 2/4:** FAIL → PASS. **Step 5: Commit** `feat(archon): unit-test generation + sandboxed execution ranking`
+
+### Task 11: Pipeline assembler + best-practice specs
+
+**Files:** Create `src/archon/assemble.ts` + test.
+**Interfaces:**
+- `bestPracticeSpec(tags: string[]): ArchitectureSpec` — Archon's empirical defaults: code tags → generator(ensemble)→fuser→unittest; reasoning → generator→fuser→critic→ranker→verifier; general/instruction → generator→critic→ranker→fuser; trivial → single generator.
+- `assemble(task, tags, spec, deps, pools): Promise<{ answer: string; candidates: Candidate[] }>` — run layers in order; `pools` supplies profile lists per role.
+
+- [ ] **Step 1: Failing test** (spec selection by tag; assemble pipes layers, DI'd layer fns)
+```ts
+// src/archon/assemble.test.ts
+import { describe, it, expect } from "vitest";
+import { bestPracticeSpec } from "./assemble.js";
+describe("bestPracticeSpec", () => {
+  it("code tasks include a unittest layer", () => {
+    expect(bestPracticeSpec(["python","code"]).layers.map(l=>l.kind)).toContain("unittest");
+  });
+  it("reasoning tasks include a verifier layer", () => {
+    expect(bestPracticeSpec(["reasoning"]).layers.map(l=>l.kind)).toContain("verifier");
+  });
+  it("general tasks use ranker+fuser, no unittest", () => {
+    const k = bestPracticeSpec(["general"]).layers.map(l=>l.kind);
+    expect(k).toContain("ranker"); expect(k).not.toContain("unittest");
+  });
+});
+```
+- [ ] **Step 3: Implement** (selection logic + a thin executor that dispatches each layer to the Task 6-10 functions; pools default to the Task 5 profiles)
+```ts
+// src/archon/assemble.ts
+import type { ArchitectureSpec, Candidate, EngineDeps } from "./types.js";
+import { generate } from "./layers/generator.js";
+import { fuse } from "./layers/fuser.js";
+import { critique } from "./layers/critic.js";
+import { rank } from "./layers/ranker.js";
+import { verifyBest } from "./layers/verifier.js";
+import { unitTestRank } from "./layers/unittest.js";
+
+export interface Pools { generators: string[]; fuser: string; critic: string; ranker: string; verifiers: string[]; tester: string; }
+
+const isCode = (tags: string[]) => tags.some((t) => ["code","python","typescript","javascript","csharp","sql"].includes(t));
+const isReasoning = (tags: string[]) => tags.includes("reasoning");
+
+export function bestPracticeSpec(tags: string[]): ArchitectureSpec {
+  if (isCode(tags)) return { name: "code", layers: [ {kind:"generator",samples:1}, {kind:"fuser"}, {kind:"unittest"} ] };
+  if (isReasoning(tags)) return { name: "reasoning", layers: [ {kind:"generator",samples:2}, {kind:"fuser"}, {kind:"critic"}, {kind:"ranker",topK:3}, {kind:"verifier"} ] };
+  return { name: "general", layers: [ {kind:"generator",samples:1}, {kind:"critic"}, {kind:"ranker",topK:3}, {kind:"fuser"} ] };
+}
+
+export async function assemble(
+  task: string, tags: string[], spec: ArchitectureSpec, deps: EngineDeps, pools: Pools, lang = "python",
+): Promise<{ answer: string; candidates: Candidate[] }> {
+  let candidates: Candidate[] = [];
+  for (const layer of spec.layers) {
+    switch (layer.kind) {
+      case "generator": candidates = await generate(task, layer.profiles ?? pools.generators, layer.samples ?? 1, deps); break;
+      case "fuser": candidates = [await fuse(task, candidates, pools.fuser, deps)]; break;
+      case "critic": candidates = await critique(task, candidates, pools.critic, deps); break;
+      case "ranker": candidates = await rank(task, candidates, pools.ranker, layer.topK ?? 3, deps); break;
+      case "verifier": candidates = [await verifyBest(task, candidates, pools.verifiers, deps)]; break;
+      case "unittest": candidates = await unitTestRank(task, candidates, pools.tester, lang, deps); break;
+    }
+    if (candidates.length === 0) break;
+  }
+  return { answer: candidates[0]?.text ?? "", candidates };
+}
+```
+- [ ] **Steps 2/4/5:** FAIL → PASS → Commit `feat(archon): pipeline assembler + best-practice specs per task tag`
+
+### Task 12: Runtime adapters + `archon_run` MCP tool
+
+**Files:** Create `src/archon/runtime.ts`, `src/archon/index.ts`; Modify `src/index.ts`; Test `src/archon/runtime.test.ts`.
+**Interfaces:** `makeEngineDeps(opts)` binds real `spawnAgent`/file IO (output written to a file, read back) + injects KB policy preamble; `runArchon(task, opts): Promise<{answer; spec; traceId}>` → `deriveTags` → `bestPracticeSpec` → `assemble` → `writeTrace`. Register `archon_run` using the repo's real API `server.registerTool(name, {title, description, inputSchema: z.object({...})}, handler)` (verified at `src/index.ts:165`, `z` is `import * as z from "zod"`, content items `type: "text" as const`).
+
+- [ ] **Step 1: Failing test** (deps adapter: outputPathFor unique; runArchon wires tags→spec) → **Step 3: Implement** (mirror `spawn_agent` registration; default pools from Task 5 profile names) → **Step 5: Commit** `feat(archon): runtime adapters + archon_run MCP tool`. Run `npm run typecheck && npm test && npm run build` green before commit.
+
+### Task 13: Eval — execution-grounded (code) + judge (reasoning), baseline vs Archon
+
+**Files:** Create `eval/judge.ts`, `eval/exec-grade.ts`, `eval/run-eval.ts`, `eval/tasks/ours.jsonl` + tests. Add `eval/**/*.test.ts` to `vitest.config.ts` include if needed.
+**Interfaces:** `judge(task, answer, reference, deps)` (LLM-judge, 0–1, reasoning/instruction tasks); `execGrade(answer, tests, lang)` via `runInSandbox` (objective pass@1, code tasks); `summarize(rows)` → `{baselineMean, archonMean, wins, n}`; `main()` runs single-best-agent baseline vs `runArchon` over `ours.jsonl` and prints the report. Seed 5 real tasks (2 code w/ hidden tests, 2 RCA/reasoning, 1 refactor). Success bar: `archonMean >= baselineMean` and code-task `wins > 0`.
+
+- [ ] Steps: failing tests (`summarize`, `parseScore`, `extractCode` reuse) → implement → pass → live smoke (`npx tsx eval/run-eval.ts`) → commit `feat(eval): execution-grounded + judged baseline-vs-archon harness`.
 
 ---
 
 ## Self-Review
 
-**1. Spec coverage**
-- Orchestrator over provider-agents → Tasks 1–10 (module + MCP tools). ✓
-- Thinker/Worker/Verifier (TRINITY) → Tasks 2, 4. ✓
-- Mixture-of-Agents → Task 7. ✓
-- Reflexivo-now policy learning (CMA-ES/GRPO analog) → Tasks 5, 6, 9. ✓
-- Shared knowledge base + agent-to-agent comms via `profiles.yaml` + Obsidian (user's mechanism) → Tasks 8, 10, 11. ✓
-- Prove ≥ Sakana on our tasks + public benchmark → Tasks 12, 13, 14. ✓
-- "GEPA depois" → deferred to the sequel plan (below), correctly out of this plan's scope. ✓
+**Spec coverage:** Diverse OpenRouter pool (T5) · generator+best-of-N (T6) · fuser/MoA (T7) · critic+ranker (T8) · multi-verifier vote (T9) · unit-test execution, the +56% lever (T10) · per-tag best-practice assembler (T11) · MCP tool (T12) · execution+judge eval proving ≥ baseline and public-comparable (T13). Foundation reused (T1 done, T2–T4). ✓
 
-**2. Placeholder scan** — Every code step contains complete code; the only deliberately-light spots are the live dataset rows (Task 13 Step 4 gives one full example + a precise recipe for four more) and the live LiveCodeBench download/execution (Task 14 grades pure adapter logic, live path described). These are data/IO seams, not code placeholders.
+**Honest guardrails encoded:** trivial→single generator (budget-aware, per 2604.02460); multi-verifier vote (imperfect-verifier mitigation, 2502.20379); per-tag specs (no-transfer, Archon); execution grounding for code (objective signal). ✓
 
-**3. Type consistency** — `CoordinatorDeps` (Task 4) is reused verbatim by `moa.ts` (Task 7) and `runtime.ts` (Task 10). `Policy`/`PolicyRule` shape is identical across `types.ts`, `policy.ts`, `memory.ts`, `reflect.ts`. `EvalTask`/`EvalRow` consistent across Tasks 13–14. `spawnAgent` signature matches `src/spawner.ts:83`. `SpawnResult` matches `src/types.ts:55`.
+**Type consistency:** `Candidate`/`EngineDeps`/`ArchitectureSpec`/`Pools` shared from `src/archon/types.ts`; layer fns all `(task, candidates, profile(s), deps)`; `spawn`/`SpawnResult` match `src/spawner.ts:83`/`src/types.ts:55`. ✓
 
-**Risks / follow-ups**
-- The exact `server.tool(...)` registration API must be copied from the existing `spawn_agent` in `src/index.ts` (Task 10 Step 4 flags this).
-- The Obsidian MCP URL/port/token (Task 11) depend on the `mcp-tools-istefox` plugin running; the `--add-dir` + preamble path (Task 8) is the always-on fallback that needs no server.
-- Live agent runs cost tokens/time; unit tests never spawn real processes.
+**Risks:** OpenRouter model ids drift (T5 mandates live verification, no invented ids); sandbox requires `python3`+`pytest` present (T10/T13 — implementer notes if absent and gates the live path); `assemble` layer set is fixed best-practice (Phase 2 search replaces the hand-picked specs).
 
----
+## Phase 2 (separate plan): Bayesian architecture search + learned controller
 
-## Sequel (separate plan): GEPA/DSPy programmatic optimization
-
-Once this plan has produced a trace corpus with judged scores, a **second plan** introduces `dspy.GEPA` (reflective prompt evolution, ICLR 2026 — outperforms GRPO by up to 20% / MIPROv2 by 13% with 35× fewer rollouts) to optimize the role prompts and routing as a DSPy program over `eval/tasks/ours.jsonl` + the public adapters. That plan is Python (a new sibling repo), consumes this plan's traces and metric, and is gated on having ≥ ~50 judged traces. It is intentionally NOT in this plan because it is a different stack and subsystem.
+Once Phase 1 generates judged traces, a second plan adds: Bayesian optimization over `{#generators, samples, fusion layers, verifier on/off, unittest on/off, topK}` evaluated on a 20% eval sample per task tag (Archon: Bayesian beat greedy/random in 95.2% of cases); a controller that loads the winning `ArchitectureSpec` per tag from Obsidian; and GEPA reflective evolution of layer prompts. Gated on ≥ ~50 judged traces from Phase 1.
