@@ -2,6 +2,7 @@
 export * from "./types.js";
 export * from "./trace.js";
 export * from "./memory.js";
+export * from "./learnings.js";
 export * from "./assemble.js";
 export * from "./runtime.js";
 export { generate } from "./layers/generator.js";
