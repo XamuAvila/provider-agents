@@ -72,6 +72,15 @@ export interface Candidate {
   critique?: string;
 }
 
+export type LayerKind = "generator" | "fuser" | "critic" | "ranker" | "verifier" | "unittest";
+export interface LayerConfig { kind: LayerKind; profiles?: string[]; samples?: number; topK?: number; }
+export interface ArchitectureSpec { name: string; layers: LayerConfig[]; }
+export interface EngineDeps {
+  spawn: (profile: string, prompt: string, outputPath: string, cwd?: string) => Promise<import("../types.js").SpawnResult>;
+  readOutput: (path: string) => string;
+  outputPathFor: (label: string) => string;
+}
+
 export const EMPTY_POLICY: Policy = {
   version: 0,
   rules: [],
