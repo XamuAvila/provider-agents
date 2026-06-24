@@ -19,6 +19,7 @@
 - Sandbox: executed code runs in a fresh temp dir, hard wall-clock timeout, killed process tree, NEVER the repo working tree; never execute code with network access; never log secrets.
 - Empirical layer rules from Archon (arxiv 2409.15254) are the Phase-1 defaults: **code → unit-test exec**, **reasoning → verifier vote**, **instruction → ranker+critic**. Generators ordered best→worst; more generators help monotonically.
 - Honest guardrails (from 2604.02460, 2502.20379): multi-agent is NOT always better than a single strong agent at equal budget; verifiers are imperfect (false positives → diminishing returns). The pipeline MUST be eval-gated and budget-aware — a trivial task routes to a single generator.
+- MODEL POOL (verified live 2026-06-23): reliable engine for baseline + heavy generation = paid `deepseek` (claude-p); `kimi` (claude-p) is the alternative. Verified-working `:free` ensemble generators: `gen-gptoss` (openai/gpt-oss-120b), `gen-nemotron-super` (nvidia nemotron-3-super-120b), `openrouter-reasoning` (nvidia nemotron-ultra 550B), `gen-gemma` (google gemma-4-31b). EXCLUDED: Venice-hosted free models (`qwen3-coder`, `llama-3.3-70b`, `qwen3-next`) return HTTP 429; the stale `nex-agi/nex-n2-pro:free` (`openrouter-coder`) was removed from the free list. NEVER route generation through unverified/invented ids; the eval harness MUST handle 429 with retry/fallback, and `deepseek` guarantees ≥1 candidate.
 - Tests use Vitest with dependency-injected spawn/exec — NO real agent processes or real code execution in unit tests.
 - Run `npm run typecheck` and `npm test` green before every commit. Commit messages append:
   `Co-Authored-By: samuel-avila-blis <samuel.avila@blisai.com>` and `Claude-Session: https://claude.ai/code/session_01CTUi2ga1iUAY8AndtiNdhr`.
@@ -176,7 +177,9 @@ Carry over the memory module from the prior plan verbatim, in `src/archon/memory
 
 ## Phase 1 — The Archon best-practice pipeline
 
-### Task 5: Diverse OpenRouter generator pool (profiles)
+### Task 5: Diverse OpenRouter generator pool (profiles) — **DONE (2026-06-23, no git — config repo)**
+
+**Applied:** added 3 verified-working `:free` generators to `profiles.yaml` — `gen-gptoss` (openai/gpt-oss-120b), `gen-nemotron-super` (nvidia nemotron-3-super-120b), `gen-gemma` (google gemma-4-31b); they join the existing verified `openrouter-reasoning` (nvidia nemotron-ultra 550B). Each was smoke-tested live (returned clean code, no 429). The originally-planned Venice-hosted ids (`qwen3-coder`, `llama-3.3-70b`, `qwen3-next`) were EXCLUDED after live HTTP 429s; `nex-agi/nex-n2-pro:free` is a stale id removed from the free list. Reliable heavy/baseline engine = `deepseek` (claude-p); `kimi` is the alternative. See Global Constraints → MODEL POOL.
 
 **Files (edit, NO git commit — deepclaude is not a repo):** `/home/samuel/Documentos/blis/repos/deepclaude/.claude/profiles.yaml`.
 
@@ -595,7 +598,7 @@ export async function assemble(
 - `extractCompletion(modelText: string): string` — strip markdown fences; return the body to append after `problem.prompt` (reuse `extractCode` from `src/archon/layers/unittest.ts`).
 - `gradeHumanEval(problem, completion, runner?)` — assemble `prompt + completion + test + check(entryPoint)` and run via the Task 10 sandbox.
 - `passAt1(problems, solve, deps): Promise<{ mean: number; passed: number; n: number; perTask: { taskId: string; passed: boolean }[] }>` where `solve(problem) => Promise<string /*completion*/>`.
-- `main()` builds the baseline solver (single strongest generator profile → one completion) and the Archon solver (`runArchon` with the code/unit-test spec from Task 11, returns the best candidate's completion), runs both over the subset, prints `{ baselinePass1, archonPass1, delta, n }`.
+- `main()` builds the baseline solver (single `deepseek` → one completion) and the Archon solver (`runArchon` with the code/unit-test spec from Task 11, returns the best candidate's completion), runs both over the subset, prints `{ baselinePass1, archonPass1, delta, n }`.
 
 **Grader (the crux — reuses Task 10 `runInSandbox` signature `(files, cmd, timeoutMs) => {ok,output}`):**
 ```ts
@@ -617,8 +620,8 @@ export async function gradeHumanEval(
 ```
 
 **Honest setup (encode in `run-eval.ts`):**
-- Baseline solver: single strongest generator profile → one completion → `gradeHumanEval`.
-- Archon solver: generator ensemble (≥3 diverse profiles, Task 6) → `unitTestRank` (Task 10) generates tests, runs each candidate against them in the sandbox, returns the best-passing candidate's completion → `gradeHumanEval` on the hidden canonical test.
+- Baseline solver: single `deepseek` (claude-p, reliable, no rate-limit) → one completion → `gradeHumanEval`.
+- Archon solver: diverse ensemble `["deepseek", "gen-gptoss", "gen-nemotron-super", "gen-gemma"]` (Task 6) → `unitTestRank` (Task 10, testGen profile = `deepseek`) generates tests, runs each candidate in the sandbox, returns the best-passing candidate's completion → `gradeHumanEval` on the hidden canonical test. Free members are best-effort: on HTTP 429 the harness retries with backoff then drops that member; `deepseek` guarantees ≥1 candidate so the ensemble never empties.
 - Subset: fixed 20+ problems (seeded order). `log()` the subset size and that it IS a subset — no silent truncation.
 
 **Success bar (REQUIRED by the project goal):** over the subset, `archonPass1 >= baselinePass1` AND `archonPass1 > 0`; report exact counts (`passed/n`). If `python3` is absent, the harness prints a clear SKIPPED message and exits non-zero — never a fake pass.
