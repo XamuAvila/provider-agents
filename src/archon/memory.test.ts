@@ -12,9 +12,8 @@ let dir: string;
 beforeEach(() => { dir = mkdtempSync(join(tmpdir(), "vault-")); });
 afterEach(() => { rmSync(dir, { recursive: true, force: true }); });
 
-const trace = (id: string): Trace => ({
-  id, task: "t " + id, taskTags: ["ts"], turns: [], accepted: true,
-  score: 1, createdAt: "2026-06-23T00:00:00.000Z",
+const trace = (id: string, createdAt = "2026-06-23T00:00:00.000Z"): Trace => ({
+  id, task: "t " + id, taskTags: ["ts"], turns: [], accepted: true, score: 1, createdAt,
 });
 
 describe("memory", () => {
@@ -30,12 +29,15 @@ describe("memory", () => {
     expect(got[0].id).toBe("a");
     expect(got[0].taskTags).toEqual(["ts"]);
     expect(got[0].accepted).toBe(true);
+    expect(got[0].task).toBe("t a");
+    expect(got[0].score).toBe(1);
+    expect(got[0].createdAt).toBe("2026-06-23T00:00:00.000Z");
   });
 
   it("readRecentTraces returns newest first, capped by limit", () => {
-    writeTrace(trace("a"), dir);
-    writeTrace(trace("b"), dir);
-    writeTrace(trace("c"), dir);
+    writeTrace(trace("a", "2026-06-23T00:00:01.000Z"), dir);
+    writeTrace(trace("b", "2026-06-23T00:00:02.000Z"), dir);
+    writeTrace(trace("c", "2026-06-23T00:00:03.000Z"), dir);
     const got = readRecentTraces(dir, 2);
     expect(got.map((t) => t.id)).toEqual(["c", "b"]);
   });

@@ -3,11 +3,12 @@ import {
   readFileSync, writeFileSync, existsSync, mkdirSync, readdirSync,
 } from "node:fs";
 import { join } from "node:path";
+import { homedir } from "node:os";
 import yaml from "js-yaml";
 import type { Policy, Trace } from "./types.js";
 import { EMPTY_POLICY } from "./types.js";
 
-const DEFAULT_VAULT = "/home/samuel/Documentos/Obsidian Vault";
+const DEFAULT_VAULT = join(homedir(), "Documentos", "Obsidian Vault");
 // Namespaced to "archon" so traces live under <vault>/archon/ and don't collide
 // with other tooling that may share the same vault.
 const SUBDIR = "archon";
@@ -24,7 +25,7 @@ function archonDir(baseDir: string): string {
 
 /** Split a `---`-fenced frontmatter doc into (frontmatter object, body). */
 function splitFrontmatter(text: string): { data: Record<string, unknown>; body: string } {
-  const m = text.match(/^---\n([\s\S]*?)\n---\n?([\s\S]*)$/);
+  const m = text.match(/^---\r?\n([\s\S]*?)\r?\n---\r?\n?([\s\S]*)$/);
   if (!m) return { data: {}, body: text };
   return { data: (yaml.load(m[1]) as Record<string, unknown>) ?? {}, body: m[2] };
 }
@@ -66,37 +67,45 @@ export function writeTrace(trace: Trace, baseDir: string): string {
 export function readRecentTraces(baseDir: string, limit: number): Trace[] {
   const dir = join(archonDir(baseDir), TRACES);
   if (!existsSync(dir)) return [];
-  const files = readdirSync(dir)
+  const traces = readdirSync(dir)
     .filter((f) => f.endsWith(".md"))
-    .sort()
-    .reverse()
-    .slice(0, limit);
-
-  return files.map((f) => {
-    const { data, body } = splitFrontmatter(readFileSync(join(dir, f), "utf-8"));
-    const taskMatch = body.match(/## Task\n([\s\S]*?)\n## Turns/);
-    return {
-      id: String(data.id ?? f.replace(/\.md$/, "")),
-      task: taskMatch ? taskMatch[1].trim() : "",
-      taskTags: (data.taskTags as string[]) ?? [],
-      turns: [],
-      accepted: Boolean(data.accepted),
-      score: data.score == null ? undefined : Number(data.score),
-      createdAt: String(data.createdAt ?? ""),
-    };
-  });
+    .map((f): Trace | null => {
+      try {
+        const { data, body } = splitFrontmatter(readFileSync(join(dir, f), "utf-8"));
+        const taskMatch = body.match(/## Task\n([\s\S]*?)\n## Turns/);
+        return {
+          id: String(data.id ?? f.replace(/\.md$/, "")),
+          task: taskMatch ? taskMatch[1].trim() : "",
+          taskTags: Array.isArray(data.taskTags) ? (data.taskTags as string[]) : [],
+          turns: [],
+          accepted: data.accepted === true,
+          score: data.score == null ? undefined : Number(data.score),
+          createdAt: String(data.createdAt ?? ""),
+        };
+      } catch {
+        return null;
+      }
+    })
+    .filter((t): t is Trace => t !== null);
+  // newest-first by ISO createdAt (robust vs lexicographic filename sort)
+  return traces.sort((a, b) => b.createdAt.localeCompare(a.createdAt)).slice(0, limit);
 }
 
 export function readPolicy(baseDir: string): Policy {
   const path = join(archonDir(baseDir), POLICY_FILE);
-  if (!existsSync(path)) return EMPTY_POLICY;
-  const { data } = splitFrontmatter(readFileSync(path, "utf-8"));
-  return {
-    version: Number(data.version ?? 0),
-    rules: (data.rules as Policy["rules"]) ?? [],
-    notes: String(data.notes ?? ""),
-    updatedAt: String(data.updatedAt ?? EMPTY_POLICY.updatedAt),
-  };
+  const empty = (): Policy => ({ ...EMPTY_POLICY, rules: [...EMPTY_POLICY.rules] });
+  if (!existsSync(path)) return empty();
+  try {
+    const { data } = splitFrontmatter(readFileSync(path, "utf-8"));
+    return {
+      version: Number(data.version ?? 0),
+      rules: Array.isArray(data.rules) ? (data.rules as Policy["rules"]) : [],
+      notes: String(data.notes ?? ""),
+      updatedAt: String(data.updatedAt ?? EMPTY_POLICY.updatedAt),
+    };
+  } catch {
+    return empty();
+  }
 }
 
 export function writePolicy(policy: Policy, baseDir: string): string {
