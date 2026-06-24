@@ -36,6 +36,9 @@ describe("deriveTags", () => {
   it("does not tag 'the function of the liver' as code", () => {
     expect(deriveTags("The function of the liver is to filter blood")).toEqual(["general"]);
   });
+  it("does not tag 'namespace of discourse' as csharp", () => {
+    expect(deriveTags("in the namespace of academic discourse")).not.toContain("csharp");
+  });
   // --- positive: real code in each language ---
   it("tags real SQL (select...from...where) as sql+code", () => {
     const t = deriveTags("SELECT id FROM users WHERE active = 1");
@@ -49,9 +52,10 @@ describe("deriveTags", () => {
     const t = deriveTags("function greet(name) { return name }");
     expect(t).toContain("javascript"); expect(t).toContain("code");
   });
-  it("tags a C# namespace as csharp+code", () => {
+  it("tags a C# namespace as csharp+code, with csharp appearing once (deduped)", () => {
     const t = deriveTags("namespace MyApp { public class Foo {} }");
     expect(t).toContain("csharp"); expect(t).toContain("code");
+    expect(t.filter((x) => x === "csharp")).toHaveLength(1);
   });
   it("tags pure code-intent without a language as code", () => {
     expect(deriveTags("implement a solution to this problem")).toEqual(["code"]);

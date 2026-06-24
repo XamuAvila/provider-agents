@@ -10,7 +10,10 @@ const RULES: { tag: string; re: RegExp }[] = [
   { tag: "typescript", re: /\btypescript\b|\.tsx?\b|\bexport\s+(function|const|class|interface|type|default|async)\b/i },
   { tag: "typescript", re: /\binterface\s+[A-Z]\w*/ },
   { tag: "javascript", re: /\bjavascript\b|\.jsx?\b|\bfunction\s+\w+\s*\([^)]*\)\s*\{|\bconst\s+\w+\s*=|\b(let|var)\s+\w+\s*=/i },
-  { tag: "csharp", re: /\bc#|\bcsharp\b|\.cs\b|\bpublic\s+(class|static|void|async)\b|\bnamespace\s+[A-Z]\w*|\busing\s+System\b/i },
+  { tag: "csharp", re: /\bc#|\bcsharp\b|\.cs\b|\bpublic\s+(class|static|void|async)\b|\busing\s+System\b/i },
+  // namespace PascalCase check is case-sensitive (no /i): under /i, [A-Z] matches lowercase
+  // too, so "namespace of discourse" would mis-tag as csharp (same bug as the interface split).
+  { tag: "csharp", re: /\bnamespace\s+[A-Z]\w*/ },
   { tag: "sql", re: /\bsql\b|\bselect\b[\s\S]{0,200}\bfrom\b[\s\S]{0,120}\b(where|join|group\s+by|order\s+by|having|limit)\b|\binsert\s+into\b[\s\S]{0,120}\bvalues\b|\bcreate\s+table\b|\bupdate\b[\s\S]{0,80}\bset\b/i },
   { tag: "security", re: /\bsecurity\b|\bvulnerab|\bowasp\b|\binjection\b|\bxss\b|\bcsrf\b|\bauth(entication|orization)\b/i },
   { tag: "reasoning", re: /\bwhy\b|\bexplain\b|\breason\b|\bprove\b|\banaly[sz]e\b|\broot\s+cause\b|\brca\b|\bstep[- ]by[- ]step\b/i },
@@ -24,8 +27,10 @@ const CODE_INTENT = /\bcode\b|\bimplement\b|\bwrite a function\b|\balgorithm\b|\
 export function deriveTags(task: string): string[] {
   const matched: string[] = [];
   for (const { tag, re } of RULES) if (re.test(task)) matched.push(tag);
+  // A tag can match via more than one RULES entry (interface/namespace splits) — dedupe.
+  const unique = [...new Set(matched)];
   // TypeScript is a superset of JavaScript; if both fire, keep only typescript.
-  const langs = matched.includes("typescript") ? matched.filter((t) => t !== "javascript") : matched;
+  const langs = unique.includes("typescript") ? unique.filter((t) => t !== "javascript") : unique;
   const out = [...langs];
   if (out.some((t) => CODE_TAGS.has(t)) && !out.includes("code")) out.push("code");
   if (!out.includes("code") && CODE_INTENT.test(task)) out.push("code");
