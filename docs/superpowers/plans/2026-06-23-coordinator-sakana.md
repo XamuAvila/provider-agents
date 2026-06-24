@@ -577,24 +577,65 @@ export async function assemble(
 
 - [ ] **Step 1: Failing test** (deps adapter: outputPathFor unique; runArchon wires tags→spec) → **Step 3: Implement** (mirror `spawn_agent` registration; default pools from Task 5 profile names) → **Step 5: Commit** `feat(archon): runtime adapters + archon_run MCP tool`. Run `npm run typecheck && npm test && npm run build` green before commit.
 
-### Task 13: Eval — execution-grounded (code) + judge (reasoning), baseline vs Archon
+### Task 13: Eval — HumanEval (famous public greenfield benchmark), single-agent baseline vs Archon
 
-**Files:** Create `eval/judge.ts`, `eval/exec-grade.ts`, `eval/run-eval.ts`, `eval/tasks/ours.jsonl` + tests. Add `eval/**/*.test.ts` to `vitest.config.ts` include if needed.
-**Interfaces:** `judge(task, answer, reference, deps)` (LLM-judge, 0–1, reasoning/instruction tasks); `execGrade(answer, tests, lang)` via `runInSandbox` (objective pass@1, code tasks); `summarize(rows)` → `{baselineMean, archonMean, wins, n}`; `main()` runs single-best-agent baseline vs `runArchon` over `ours.jsonl` and prints the report. Seed 5 real tasks (2 code w/ hidden tests, 2 RCA/reasoning, 1 refactor). Success bar: `archonMean >= baselineMean` and code-task `wins > 0`.
+**Why HumanEval:** the canonical public **greenfield** code-generation benchmark — 164 standalone problems, each a function signature + docstring → write the whole function from scratch, graded by executing hidden canonical unit tests. It is exactly Archon's biggest lever (code → unit-test execution, reported +56% Pass@1) and lets us compare against published numbers. **The Archon pipeline NEVER sees the hidden canonical test** — it selects among candidates using its OWN generated tests (Task 10 `unitTestRank`); the canonical test is used only by `gradeHumanEval` to compute the reported Pass@1. MIT-licensed (openai/human-eval), grading needs only plain `python3` (the `test` field defines `check(candidate)` with asserts — no pytest).
 
-- [ ] Steps: failing tests (`summarize`, `parseScore`, `extractCode` reuse) → implement → pass → live smoke (`npx tsx eval/run-eval.ts`) → commit `feat(eval): execution-grounded + judged baseline-vs-archon harness`.
+**Files:**
+- Create `eval/humaneval.ts` — loader + grader + Pass@1 aggregator.
+- Create `eval/fetch-humaneval.ts` — one-shot downloader of the official dataset → `eval/tasks/humaneval.jsonl` (NOT run during eval; network allowed here — this is the harness, not sandboxed candidate code).
+- Create `eval/tasks/humaneval-subset.jsonl` — fixed ≥20-problem subset (seeded order), committed for reproducibility.
+- Create `eval/run-eval.ts` — baseline vs Archon over the subset; prints both Pass@1 numbers.
+- Test: `eval/humaneval.test.ts`.
+- Add `eval/**/*.test.ts` to `vitest.config.ts` include if needed.
+
+**Interfaces:**
+- `type HumanEvalProblem = { taskId: string; prompt: string; entryPoint: string; test: string; canonicalSolution: string }`
+- `loadHumanEval(path: string): HumanEvalProblem[]` — parse JSONL, map snake_case fields (`task_id`,`entry_point`,`canonical_solution`) → camelCase.
+- `extractCompletion(modelText: string): string` — strip markdown fences; return the body to append after `problem.prompt` (reuse `extractCode` from `src/archon/layers/unittest.ts`).
+- `gradeHumanEval(problem, completion, runner?)` — assemble `prompt + completion + test + check(entryPoint)` and run via the Task 10 sandbox.
+- `passAt1(problems, solve, deps): Promise<{ mean: number; passed: number; n: number; perTask: { taskId: string; passed: boolean }[] }>` where `solve(problem) => Promise<string /*completion*/>`.
+- `main()` builds the baseline solver (single strongest generator profile → one completion) and the Archon solver (`runArchon` with the code/unit-test spec from Task 11, returns the best candidate's completion), runs both over the subset, prints `{ baselinePass1, archonPass1, delta, n }`.
+
+**Grader (the crux — reuses Task 10 `runInSandbox` signature `(files, cmd, timeoutMs) => {ok,output}`):**
+```ts
+// eval/humaneval.ts
+import { runInSandbox } from "../src/archon/sandbox.js";
+export type SandboxRunner = (files: Record<string, string>, cmd: string[], timeoutMs: number) => Promise<{ ok: boolean; output: string }>;
+export async function gradeHumanEval(
+  problem: HumanEvalProblem,
+  completion: string,
+  runner: SandboxRunner = runInSandbox,
+): Promise<{ passed: boolean; output: string }> {
+  // HumanEval grades prompt + completion + test + a call to check(entry_point).
+  const program =
+    problem.prompt + completion + "\n\n" + problem.test +
+    "\n\ncheck(" + problem.entryPoint + ")\n";
+  const { ok, output } = await runner({ "prog.py": program }, ["python3", "prog.py"], 10_000);
+  return { passed: ok, output: output.slice(0, 2000) };
+}
+```
+
+**Honest setup (encode in `run-eval.ts`):**
+- Baseline solver: single strongest generator profile → one completion → `gradeHumanEval`.
+- Archon solver: generator ensemble (≥3 diverse profiles, Task 6) → `unitTestRank` (Task 10) generates tests, runs each candidate against them in the sandbox, returns the best-passing candidate's completion → `gradeHumanEval` on the hidden canonical test.
+- Subset: fixed 20+ problems (seeded order). `log()` the subset size and that it IS a subset — no silent truncation.
+
+**Success bar (REQUIRED by the project goal):** over the subset, `archonPass1 >= baselinePass1` AND `archonPass1 > 0`; report exact counts (`passed/n`). If `python3` is absent, the harness prints a clear SKIPPED message and exits non-zero — never a fake pass.
+
+- [ ] Steps: failing unit tests (`loadHumanEval` maps fields; `extractCompletion` strips fences; `gradeHumanEval` PASSES a known-good canonical solution and FAILS a known-bad one via a stub runner; `passAt1` aggregates) → implement → pass → `npx tsx eval/fetch-humaneval.ts` then commit the 20-problem subset → live run `npx tsx eval/run-eval.ts` showing both Pass@1 numbers → commit `feat(eval): HumanEval greenfield benchmark, single-agent baseline vs Archon pipeline`.
 
 ---
 
 ## Self-Review
 
-**Spec coverage:** Diverse OpenRouter pool (T5) · generator+best-of-N (T6) · fuser/MoA (T7) · critic+ranker (T8) · multi-verifier vote (T9) · unit-test execution, the +56% lever (T10) · per-tag best-practice assembler (T11) · MCP tool (T12) · execution+judge eval proving ≥ baseline and public-comparable (T13). Foundation reused (T1 done, T2–T4). ✓
+**Spec coverage:** Diverse OpenRouter pool (T5) · generator+best-of-N (T6) · fuser/MoA (T7) · critic+ranker (T8) · multi-verifier vote (T9) · unit-test execution, the +56% lever (T10) · per-tag best-practice assembler (T11) · MCP tool (T12) · **HumanEval** greenfield eval (T13) proving Archon Pass@1 ≥ single-agent baseline on a famous public benchmark. Foundation reused (T1 done, T2–T4). ✓
 
 **Honest guardrails encoded:** trivial→single generator (budget-aware, per 2604.02460); multi-verifier vote (imperfect-verifier mitigation, 2502.20379); per-tag specs (no-transfer, Archon); execution grounding for code (objective signal). ✓
 
 **Type consistency:** `Candidate`/`EngineDeps`/`ArchitectureSpec`/`Pools` shared from `src/archon/types.ts`; layer fns all `(task, candidates, profile(s), deps)`; `spawn`/`SpawnResult` match `src/spawner.ts:83`/`src/types.ts:55`. ✓
 
-**Risks:** OpenRouter model ids drift (T5 mandates live verification, no invented ids); sandbox requires `python3`+`pytest` present (T10/T13 — implementer notes if absent and gates the live path); `assemble` layer set is fixed best-practice (Phase 2 search replaces the hand-picked specs).
+**Risks:** OpenRouter model ids drift (T5 mandates live verification, no invented ids); sandbox requires `python3` present — T10 `unitTestRank` also needs `pytest`; **T13 HumanEval needs only plain `python3`** (canonical `check()` asserts); the implementer notes if absent and gates the live path (SKIPPED + non-zero exit, never a fake pass); `assemble` layer set is fixed best-practice (Phase 2 search replaces the hand-picked specs).
 
 ## Phase 2 (separate plan): Bayesian architecture search + learned controller
 
