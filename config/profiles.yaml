@@ -35,7 +35,7 @@
 #
 # ── Guards de segurança ──
 # Anti-edição + anti-leitura de secrets:
-#   - claude-p (deepseek, kimi, analyst): permissions.deny nos settings JSON
+#   - claude-p (deepseek, deepseek-1m, analyst): permissions.deny nos settings JSON
 #     (deepseek.json / kimi.json) bloqueia Write/Edit/NotebookEdit e Read de .env/.ssh/.aws/*.pem.
 #   - codex: --sandbox read-only (não escreve no filesystem).
 #   - kimi-code (explorer/reviewer/coder/researcher): sem -y/--auto → não auto-aprova ações.
