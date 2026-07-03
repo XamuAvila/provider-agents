@@ -3,3 +3,7 @@ build/
 dist/
 *.tgz
 .superpowers/
+
+# Credenciais dos profiles — NUNCA versionar segredo.
+# O README.md deste dir é rastreado (documenta o formato); os *.json não.
+config/creds/*.json
