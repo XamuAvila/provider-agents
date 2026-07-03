@@ -42,17 +42,16 @@
 #     permissions.deny nos settings JSON (creds/deepseek.json ou creds/deepseek-readonly.json)
 #     bloqueia Write/Edit/NotebookEdit e Read de .env/.ssh/.aws/*.pem.
 #   - codex: --sandbox read-only (não escreve no filesystem).
-#   - openrouter-*: chat-only (openrouter-cli não tem tools/file access — seguro por natureza).
+#   - memory-writer: EXCEÇÃO — creds/deepseek-memory.json permite Write/Edit APENAS
+#     em **/*.md (escreve notas de decisão); segue negando Read de secrets.
 # Todos os system prompts reforçam: nunca imprimir/logar secrets.
 # Credenciais em config/creds/*.json (gitignored) com chmod 600.
 #
-# ── Roteamento: CLI nativo vs claude-p ──
-# Prefira SEMPRE o CLI nativo (kimi-agent / codex / openrouter-agent) quando o modelo existe
-# nele: sem proxy, sem API key (kimi = OAuth managed), mais rápido. Use claude-p (API key)
-# APENAS para modelos que existem via API mas NÃO na CLI:
-#   - deepseek-1m (ex-'kimi', renomeado 2026-07-03) — deepseek-v4-pro[1m] via claude-p.
-#   - deepseek / analyst (deepseek-v4-pro) — DeepSeek não tem CLI nativo aqui.
-# Não suba claude-p só para trocar a versão de um modelo que o CLI já oferece.
+# ── Providers ativos ──
+# Todos os profiles rodam DeepSeek V4 Pro via claude-p (API key em creds/*.json),
+# exceto `codex` (OpenAI GPT-5.5 via CLI, read-only). Os profiles free do
+# OpenRouter foram removidos (2026-07-03) por baixa confiabilidade (429, modelos
+# mortos); o Archon usa deepseek best-of-N no lugar do ensemble multi-família.
 #
 # ── Prompt engineering per modelo ──
 # O orquestrador (Claude) DEVE respeitar estas regras ao montar o prompt de spawn.
@@ -78,16 +77,6 @@
 # (histórico) O profile 'kimi' foi renomeado para 'deepseek-1m' em 2026-07-03:
 #   roda deepseek-v4-pro[1m] via claude-p — vale a guidance do DeepSeek acima.
 #
-# OpenRouter — modelos de reasoning (nex-n2-pro, nemotron):
-#   - Emitem <think> tokens suprimidos via --no-thinking-stdout. Sem guidance específica publicada.
-#   - nex-n2-pro: MoE 397B/17B ativo, post-trained sobre Qwen3.5 com "Agentic Thinking".
-#   - nemotron: MoE 550B/55B ativo, hybrid Mamba-2+Attention, otimizado para tool-use estruturado.
-#   - Prompts concisos (150-300 palavras sweet spot para modelos de reasoning 2026).
-#
-# OpenRouter — modelos chat-only (laguna, north-mini):
-#   - Sem CoT nativo. Instruções diretas, sem "pense passo a passo".
-#   - north-mini (30B): triagem rápida — prompts curtos, respostas curtas.
-#
 # ── Heurística de escolha rápida ──
 #   - deepseek          → default para coding geral, edição e correção com bom custo-benefício.
 #   - deepseek-1m       → contexto muito longo, síntese e análise ampla.
@@ -99,10 +88,11 @@
 #   - security-reviewer → revisão focada em OWASP Top 10, secrets e vulnerabilidades.
 #   - refactorer        → dead code, simplificação, consolidação e limpeza de deps.
 #   - ts-reviewer       → revisão TypeScript com LSP, type safety, async, design patterns.
-#   - python-reviewer   → revisão Python com LSP e unit testing patterns.
+#   - python-reviewer   → revisão Python com LSP, design patterns e clean code.
 #   - csharp-reviewer   → revisão C# com LSP, clean architecture e design patterns.
+#   - go-reviewer       → revisão Go com LSP, design patterns e unit testing.
 #   - codex             → fallback read-only para inspeção segura.
-#   - openrouter-*      → equivalentes free quando custo zero importa mais que tooling.
+#   - memory-writer     → escreve notas de decisão (.md) por projeto. Único com Write.
 
 defaults:
   output_dir: /tmp/provider-agents
@@ -475,7 +465,7 @@ profiles:
     model: deepseek-v4-pro[1m]
     color: "#3776AB"
     tags: [python, review, type-hint, async, injection, import]
-    skills: [unit-testing-skill]
+    skills: [design-patterns-python, clean-code-python, unit-testing-skill]
     bare: true
     system_prompt: |-
       You are a senior Python reviewer. Respond in Portuguese (pt-BR).
@@ -485,7 +475,7 @@ profiles:
     mcp_config: []
     allowed_tools: []
     timeout: 300
-    description: Revisor Python. DeepSeek + LSP + unit testing patterns.
+    description: Revisor Python. DeepSeek + LSP + design patterns + clean code + unit testing.
 
   csharp-reviewer:
     invocation: claude-p
@@ -504,6 +494,24 @@ profiles:
     allowed_tools: []
     timeout: 300
     description: Revisor C#/.NET. DeepSeek + LSP + design patterns + clean architecture.
+
+  go-reviewer:
+    invocation: claude-p
+    settings: creds/deepseek.json
+    model: deepseek-v4-pro[1m]
+    color: "#00ADD8"
+    tags: [go, golang, review, goroutine, channel, error-handling, interface]
+    skills: [design-patterns-go, unit-testing-skill]
+    bare: true
+    system_prompt: |-
+      You are a senior Go reviewer. Respond in Portuguese (pt-BR).
+      Use the LSP tool (hover, findReferences, goToDefinition) to verify type claims.
+      Separate verified facts from hypotheses; if you can't prove a claim, say "not verified".
+      Never print, echo or log secrets, API keys or tokens — redact them.
+    mcp_config: []
+    allowed_tools: []
+    timeout: 300
+    description: Revisor Go. DeepSeek + LSP + design patterns + unit testing.
 
   # ════════════════════════════════════════════
   # Perfis base (fallback por modelo)
@@ -527,192 +535,47 @@ profiles:
     description: OpenAI Codex CLI. GPT-5.5, fallback read-only para inspeção segura.
 
   # ════════════════════════════════════════════
-  # OpenRouter — modelos GRATUITOS (custo zero)
+  # Memory writer (ÚNICO com permissão de escrita — escopada a *.md)
   # ════════════════════════════════════════════
-  # Via wrapper ~/.local/bin/openrouter-agent → openrouter-cli run.
-  # Modelos :free NÃO consomem créditos. Limite: 1000 req/dia, 20/min (com $10+ de buy-in).
-  # Modelos de reasoning (laguna/nemotron) emitem <think> — suprimido via --no-thinking-stdout.
-  # Chat-only: sem tools/file access → não editam nem leem secrets do disco (seguro por natureza).
-  # Live-verificado 2026-06-23 (openrouter-cli models + spawn de teste):
-  #   VIVOS: poolside/laguna-m.1 (SWE 72.5%), cohere/north-mini-code, openai/gpt-oss-120b,
-  #          nvidia/nemotron-3-{super-120b,ultra-550b}, google/gemma-4-31b.
-  #   MORTO: nex-agi/nex-n2-pro:free ("model not supported").
-  #   429 (Venice, inutilizável sob carga): qwen/qwen3-coder, meta-llama/llama-3.3-70b, qwen/qwen3-next.
+  # creds/deepseek-memory.json: allow Write/Edit APENAS em **/*.md; deny secrets.
+  # Escreve notas de decisão por projeto (ex: docs/decisions/*.md, DECISIONS.md).
+  # Low cost: deepseek-v4-pro (sem [1m] — notas não precisam de contexto gigante).
 
-  openrouter-coder:
-    invocation: cli
-    command: openrouter-agent
-    # nex-agi/nex-n2-pro:free está MORTO no OpenRouter (live test 2026-06-23:
-    # "The specified model was not supported"). Trocado por laguna-m.1 — coder
-    # agêntico verificado funcionando hoje (SWE-bench Verified 72.5%, 256K ctx).
-    model: poolside/laguna-m.1:free
-    stdin: false
-    color: "#8B5CF6"
-    tags: [generate, implement, free]
-    system_prompt: |-
-      ## Papel
-      Gerador de código sênior.
-
-      ## Regras
-      - Reuse padrões existentes antes de reinventar.
-      - Siga as convenções da linguagem e do projeto — infira pelo código que receber, não imponha um estilo alheio.
-      - Prefira imutabilidade.
-      - Trate erros explicitamente. Valide input em boundaries. Zero secrets hardcoded.
-      - Funções focadas, nomes descritivos, sem complexidade desnecessária. Escreva testes.
-      - Decisões não óbvias precisam de justificativa e evidência.
-      - Indique a validação mais estreita recomendada e o que ainda não foi verificado.
-      - Nunca imprima, ecoe ou registre secrets, API keys ou tokens — redija-os.
-
-      ## Formato
-      - Responda em português (pt-BR). Código e identifiers em inglês.
-    args: [--raw, --no-thinking-stdout]
-    timeout: 300
-    description: Gerador de código FREE. Laguna M.1 (SWE-bench 72.5%, coder agêntico verificado 2026-06-23).
-
-  openrouter-reviewer:
-    invocation: cli
-    command: openrouter-agent
-    model: poolside/laguna-m.1:free
-    stdin: false
-    color: "#14B8A6"
-    tags: [review, free]
-    system_prompt: |-
-      ## Papel
-      Revisor de código sênior. Foco em correção, segurança, performance e manutenibilidade.
-
-      ## Processo
-      1. Leia o diff/código COMPLETO antes de comentar.
-      2. Verifique: lógica correta (happy + error paths), race conditions, null/erro handling,
-         validação de input, segurança (secrets, injection, authz), performance, testes para novos paths.
-      3. Agrupe achados por arquivo, ordene por severidade.
-
-      ## Severidades
-      - CRITICAL: BLOCK — vulnerabilidade, perda de dados, funcionalidade quebrada.
-      - HIGH: WARN — bug em edge case, validação faltando, problema de performance.
-      - MEDIUM: INFO — naming, teste faltando, duplicação.
-      - LOW: NOTE — sugestão opcional, estilo.
-
-      ## Regras
-      - Toda crítica precisa de evidência: aponte arquivo:linha. Não invente problemas.
-      - Não gaste espaço com elogio ou resumo antes dos achados.
-      - Se não houver achados, diga explicitamente e registre riscos residuais ou gaps de teste.
-      - Adapte os critérios à linguagem e convenções do projeto.
-      - Nunca imprima, ecoe ou registre secrets, API keys ou tokens — redija-os.
-
-      ## Formato
-      - Responda em português (pt-BR).
-      - Por achado: [SEVERIDADE] arquivo:linha — descrição → sugestão de fix.
-    args: [--raw, --no-thinking-stdout]
-    timeout: 300
-    description: Revisor de código FREE. Laguna M.1 (SWE-bench 72.5%, agentic multi-file).
-
-  openrouter-reasoning:
-    invocation: cli
-    command: openrouter-agent
-    model: nvidia/nemotron-3-ultra-550b-a55b:free
-    stdin: false
-    color: "#EC4899"
-    tags: [analyze, reason, free]
-    system_prompt: |-
-      You are a senior software analyst. Respond in Portuguese (pt-BR).
-      Separate verified facts from hypotheses; if you can't prove a claim, say "not verified".
-      Never print, echo or log secrets, API keys or tokens — redact them.
-    args: [--raw, --no-thinking-stdout]
-    timeout: 300
-    # Nemotron Ultra é reasoning model (CoT nativo) e chat-only via OpenRouter (sem tools).
-    # System prompt mínimo como o analyst/DeepSeek. Instruções detalhadas vão no user prompt.
-    description: Análise/reasoning FREE. Nemotron Ultra 550B (976K contexto — analisa arquivos enormes).
-
-  openrouter-quick:
-    invocation: cli
-    command: openrouter-agent
-    model: cohere/north-mini-code:free
-    stdin: false
-    color: "#06B6D4"
-    tags: [triage, classify, quick, free]
-    system_prompt: |-
-      ## Papel
-      Assistente técnico rápido para tarefas simples (classificação, extração, perguntas diretas).
-
-      ## Regras
-      - Toda afirmação sobre código DEVE ter prova (file:line ou output). Se não pode provar, diga "não verificado".
-      - Se a tarefa exigir investigação multi-arquivo profunda, comparação de alternativas, ou validação externa, diga que este profile é só para triagem e recomende explorer, researcher ou analyst.
-      - Adapte-se à linguagem do projeto — infira pelo conteúdo que receber.
-      - Nunca imprima, ecoe ou registre secrets, API keys ou tokens — redija-os.
-
-      ## Formato
-      - Responda em português (pt-BR). Direto e conciso — sem preâmbulo.
-      - Limite a resposta ao essencial e explicite quando estiver só triando.
-    args: [--raw]
-    timeout: 120
-    description: Respostas rápidas FREE. North Mini Code (30B, baixa latência, apenas triagem).
-
-  # === Archon generator ensemble (verified-working :free pool) ===
-  # Greenfield SWARM para o Archon (gera N candidatos, seleção por execução de testes).
-  # Live-verificado 2026-06-23 (HumanEval N=20: gpt-oss baseline 20/20; super/ultra/gemma
-  # rodaram na ensemble): respondem com confiabilidade, sem 429.
-  # EXCLUÍDOS por 429 (Venice, inutilizáveis em loop multi-call): qwen/qwen3-coder,
-  # meta-llama/llama-3.3-70b, qwen/qwen3-next. MORTO: nex-agi/nex-n2-pro.
-  # Âncora confiável de geração pesada = `deepseek` (claude-p, pago — reafirmado pelo user).
-  # `kimi-cli` (kimi-for-coding) está com quota 403 até o reset do ciclo; deepseek cobre agora.
-  # Diversidade de FAMÍLIAS (OpenAI, Nvidia, Google, Poolside) alimenta o MoA fuser;
-  # `openrouter-reasoning` (nemotron-ultra 550B) também é um gerador free verificado.
-  gen-gptoss:
-    invocation: cli
-    command: openrouter-agent
-    model: openai/gpt-oss-120b:free
-    stdin: false
-    color: "#0EA5E9"
-    tags: [generator, free, code]
-    system_prompt: |-
-      You are a GENERATOR in an ensemble: produce your single best, complete,
-      self-contained solution. For code tasks output ONE fenced code block and nothing
-      else. Prose in pt-BR, code in English. Never echo or hardcode secrets.
-    args: [--raw, --no-thinking-stdout]
-    timeout: 300
-    description: Generator FREE (OpenAI gpt-oss 120B, 131k). Verified 2026-06-23.
-
-  gen-nemotron-super:
-    invocation: cli
-    command: openrouter-agent
-    model: nvidia/nemotron-3-super-120b-a12b:free
-    stdin: false
-    color: "#DB2777"
-    tags: [generator, free, code]
-    system_prompt: |-
-      You are a GENERATOR in an ensemble: produce your single best, complete,
-      self-contained solution. For code tasks output ONE fenced code block and nothing
-      else. Prose in pt-BR, code in English. Never echo or hardcode secrets.
-    args: [--raw, --no-thinking-stdout]
-    timeout: 300
-    description: Generator FREE (Nvidia Nemotron-3 Super 120B, 1M ctx). Verified 2026-06-23.
-
-  gen-gemma:
-    invocation: cli
-    command: openrouter-agent
-    model: google/gemma-4-31b-it:free
-    stdin: false
-    color: "#65A30D"
-    tags: [generator, free, code]
-    system_prompt: |-
-      You are a GENERATOR in an ensemble: produce your single best, complete,
-      self-contained solution. For code tasks output ONE fenced code block and nothing
-      else. Prose in pt-BR, code in English. Never echo or hardcode secrets.
-    args: [--raw, --no-thinking-stdout]
-    timeout: 300
-    description: Generator FREE (Google Gemma-4 31B IT, 262k). Verified 2026-06-23.
-
-  gen-laguna:
-    invocation: cli
-    command: openrouter-agent
-    model: poolside/laguna-m.1:free
-    stdin: false
+  memory-writer:
+    invocation: claude-p
+    settings: creds/deepseek-memory.json
+    model: deepseek-v4-pro
     color: "#A855F7"
-    tags: [generator, free, code]
+    tags: [memory, decision, notes, adr, changelog, documentation]
+    bare: true
     system_prompt: |-
-      You are a GENERATOR in an ensemble: produce your single best, complete,
-      self-contained solution. For code tasks output ONE fenced code block and nothing
-      else. Prose in pt-BR, code in English. Never echo or hardcode secrets.
-    args: [--raw, --no-thinking-stdout]
-    timeout: 300
-    description: Generator FREE (Poolside Laguna M.1, SWE 72.5%, 256k). Verified 2026-06-23.
+      ## Papel
+      Escriba de memória do projeto. Persiste decisões, contexto e trade-offs
+      em arquivos Markdown — para que sessões futuras (de qualquer agente/modelo)
+      leiam antes de agir.
+
+      ## Regra fundamental de escrita
+      - Você SÓ pode escrever/editar arquivos .md (Write/Edit em **/*.md).
+      - NUNCA edite código, config, ou qualquer arquivo não-.md. Se a tarefa pedir,
+        recuse e explique que este profile só escreve memória em Markdown.
+      - Se o path de destino não for indicado, use `docs/decisions/<slug>.md`
+        (uma decisão por arquivo) ou anexe a `DECISIONS.md` na raiz do projeto.
+
+      ## O que registrar por decisão
+      - Título curto + data (absoluta, nunca "hoje"/"ontem").
+      - Contexto: o problema e as restrições.
+      - Decisão tomada + alternativas rejeitadas (com o porquê de cada rejeição).
+      - Consequências / follow-ups conhecidos.
+      - Evidência: file:line, comando+output, ou fonte — nunca afirme sem prova.
+
+      ## Regras
+      - Seja conciso e factual. Sem preâmbulo, sem elogio.
+      - Nunca imprima, ecoe ou registre secrets, API keys ou tokens — redija-os.
+      - Responda em português (pt-BR). Código e identifiers em inglês.
+
+      ## Formato de saída
+      - Relatório curto do que foi escrito (path + resumo de 1-2 linhas por arquivo).
+    mcp_config: []
+    allowed_tools: []
+    timeout: 180
+    description: Escriba de memória. DeepSeek, Write escopado a *.md, registra decisões por projeto.
