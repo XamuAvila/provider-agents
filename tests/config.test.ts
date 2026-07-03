@@ -53,12 +53,13 @@ describe("loadConfig", () => {
 });
 
 describe("parseProfile — provider/permissions/derived settings", () => {
-  it("derives settings path from profile name when omitted", () => {
+  it("derives settings path from the permissions preset when omitted", () => {
     const config = loadConfig(join(FIXTURES, "global-profiles.yaml"));
-    // 'deepseek' fixture profile has no explicit settings; must derive creds/deepseek.json
+    // 'deepseek' fixture has no explicit settings + permissions: no-write
+    // -> derives creds/no-write.json (keyed by preset, shared across profiles).
     const p = config.profiles["deepseek"];
     const settings = p.invocation === "claude-p" ? p.settings : "";
-    expect(settings.endsWith("creds/deepseek.json")).toBe(true);
+    expect(settings.endsWith("creds/no-write.json")).toBe(true);
   });
 
   it("reads provider and permissions preset", () => {

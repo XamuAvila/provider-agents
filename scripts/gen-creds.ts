@@ -1,8 +1,11 @@
 /**
- * Generator: build per-profile permission-only creds from profiles.yaml +
- * permission-presets.yaml. Output creds contain ONLY `permissions` — no secret.
- * The token is injected at spawn time from config/creds/secrets.json (see
- * src/spawner.ts). Regenerate after editing profiles/presets.
+ * Generator: build one permission-only cred PER PRESET that is actually used by a
+ * claude-p profile, from profiles.yaml + permission-presets.yaml. Output creds
+ * contain ONLY `permissions` — no secret. Profiles sharing a preset share one
+ * file (settings derives to creds/<preset>.json in src/config.ts), so N profiles
+ * collapse to a handful of files. The token is injected at spawn time from
+ * config/creds/secrets.json (see src/spawner.ts). Regenerate after editing
+ * profiles/presets.
  *
  * Usage: npx tsx scripts/gen-creds.ts
  */
@@ -24,19 +27,24 @@ export function generateCreds(opts: GenOpts): string[] {
   const presets = loadPresets(opts.presetsPath);
   mkdirSync(opts.outDir, { recursive: true });
 
-  const written: string[] = [];
+  // Collect the set of presets referenced by claude-p profiles (validate each).
+  const used = new Set<string>();
   for (const [name, profile] of Object.entries(config.profiles)) {
     if (profile.invocation !== "claude-p") continue;
     const presetName = profile.permissions;
-    if (!presetName) continue; // no preset -> no generated cred
-    const preset = presets[presetName];
-    if (!preset) {
+    if (!presetName) continue;
+    if (!presets[presetName]) {
       throw new Error(
         `profile "${name}" references unknown permission preset "${presetName}"`,
       );
     }
-    const out = join(opts.outDir, `${name}.json`);
-    const body = { $schema: SCHEMA, permissions: preset };
+    used.add(presetName);
+  }
+
+  const written: string[] = [];
+  for (const presetName of used) {
+    const out = join(opts.outDir, `${presetName}.json`);
+    const body = { $schema: SCHEMA, permissions: presets[presetName] };
     writeFileSync(out, JSON.stringify(body, null, 2) + "\n", "utf-8");
     chmodSync(out, 0o600);
     written.push(out);

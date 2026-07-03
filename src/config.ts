@@ -54,12 +54,20 @@ function parseProfile(raw: Record<string, unknown>, name: string): Profile {
     };
   }
 
+  const permissions = (raw.permissions as string) || undefined;
+  // Generated creds hold ONLY permissions, so profiles sharing a preset share one
+  // settings file: derive by preset (creds/<preset>.json), not per profile name.
+  // Explicit `settings` wins; fall back to the profile name only when no preset.
+  const settings =
+    (raw.settings as string) ??
+    (permissions ? `creds/${permissions}.json` : `creds/${name}.json`);
+
   return {
     invocation: "claude-p",
-    settings: (raw.settings as string) ?? `creds/${name}.json`,
+    settings,
     model: raw.model as string,
     provider: (raw.provider as string) || undefined,
-    permissions: (raw.permissions as string) || undefined,
+    permissions,
     system_prompt: (raw.system_prompt as string) || undefined,
     bare: (raw.bare as boolean) ?? false,
     timeout: raw.timeout as number | undefined,

@@ -39,22 +39,24 @@ function setup(): string {
 }
 
 describe("generateCreds", () => {
-  it("writes permission-only creds for claude-p profiles, skips cli, chmod 600", () => {
+  it("writes ONE permission-only cred per used preset, skips cli, chmod 600", () => {
     const dir = setup();
     const written = generateCreds({
       profilesPath: join(dir, "profiles.yaml"),
       presetsPath: join(dir, "presets.yaml"),
       outDir: join(dir, "creds"),
     });
-    const dsPath = join(dir, "creds", "deepseek.json");
-    expect(written).toContain(dsPath);
+    // Keyed by preset, not profile name: deepseek uses no-write -> creds/no-write.json
+    const presetPath = join(dir, "creds", "no-write.json");
+    expect(written).toEqual([presetPath]); // single distinct preset used
+    expect(written.some((p) => p.includes("deepseek"))).toBe(false); // not per-profile
     expect(written.some((p) => p.includes("codex"))).toBe(false); // cli skipped
 
-    const cred = JSON.parse(readFileSync(dsPath, "utf-8"));
+    const cred = JSON.parse(readFileSync(presetPath, "utf-8"));
     expect(cred.$schema).toBe("https://json.schemastore.org/claude-code-settings.json");
     expect(cred.permissions.deny).toContain("Write");
     expect(cred.env).toBeUndefined(); // NO secret in generated cred
-    expect(statSync(dsPath).mode & 0o777).toBe(0o600);
+    expect(statSync(presetPath).mode & 0o777).toBe(0o600);
   });
 
   it("throws when a profile references an unknown preset", () => {
