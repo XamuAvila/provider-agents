@@ -35,13 +35,14 @@
 #
 # ── Guards de segurança ──
 # Anti-edição + anti-leitura de secrets:
-#   - claude-p (deepseek, deepseek-1m, analyst): permissions.deny nos settings JSON
-#     (deepseek.json / kimi.json) bloqueia Write/Edit/NotebookEdit e Read de .env/.ssh/.aws/*.pem.
+#   - claude-p (TODOS os profiles deste arquivo — deepseek, deepseek-1m, analyst, coder,
+#     explorer, reviewer, researcher, security-reviewer, refactorer, ts/python/csharp-reviewer):
+#     permissions.deny nos settings JSON (creds/deepseek.json ou creds/deepseek-readonly.json)
+#     bloqueia Write/Edit/NotebookEdit e Read de .env/.ssh/.aws/*.pem.
 #   - codex: --sandbox read-only (não escreve no filesystem).
-#   - kimi-code (explorer/reviewer/coder/researcher): sem -y/--auto → não auto-aprova ações.
 #   - openrouter-*: chat-only (openrouter-cli não tem tools/file access — seguro por natureza).
 # Todos os system prompts reforçam: nunca imprimir/logar secrets.
-# Credenciais (deepseek.json / kimi.json) com chmod 600.
+# Credenciais em ~/.config/provider-agents/creds/*.json com chmod 600.
 #
 # ── Roteamento: CLI nativo vs claude-p ──
 # Prefira SEMPRE o CLI nativo (kimi-agent / codex / openrouter-agent) quando o modelo existe
@@ -64,7 +65,7 @@
 #   - Nomeie o artefato de saída concreto ("retorne um diff", "produza uma tabela comparativa").
 #   - Ref: https://deepseeksr1.com/prompt/
 #
-# Kimi K2.7 Code (CLI nativo — explorer/reviewer/coder/researcher):
+# Kimi K2.7 Code (CLI nativo 'kimi-agent' — nenhum profile deste arquivo o usa hoje):
 #   - System prompt estruturado é BEM-VINDO (oposto do DeepSeek). Use ## seções e delimitadores.
 #   - Few-shot examples OK quando o formato de saída é difícil de descrever.
 #   - Instruções step-by-step explícitas para tarefas complexas (o modelo não infere passos).
@@ -102,7 +103,7 @@
 #   - openrouter-*      → equivalentes free quando custo zero importa mais que tooling.
 
 defaults:
-  output_dir: /tmp/claude-agent
+  output_dir: /tmp/provider-agents
 
 profiles:
   # ════════════════════════════════════════════
@@ -188,7 +189,7 @@ profiles:
       - Liste achados com file:line e snippet relevante.
       - Quando solicitado, produza mapa de dependências (quem chama quem).
     mcp_config:
-      - /home/samuel/.config/provider-agents/semble.mcp.json
+      - ~/.config/provider-agents/semble.mcp.json
     allowed_tools: []
     timeout: 300
     description: Explorador de código. DeepSeek V4 Pro, busca exaustiva para call sites e fluxo.
