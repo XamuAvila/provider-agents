@@ -69,7 +69,7 @@ server.registerTool(
     inputSchema: z.object({
       name: z
         .string()
-        .describe("Profile name (e.g. 'deepseek', 'kimi', 'codex')"),
+        .describe("Profile name (e.g. 'deepseek', 'explorer', 'codex')"),
       invocation: z
         .enum(["claude-p", "cli"])
         .describe("Invocation type: claude-p for Anthropic-compatible APIs, cli for standalone binaries"),
@@ -174,7 +174,7 @@ server.registerTool(
       profile: z
         .string()
         .describe(
-          "Profile name from profiles.yaml (e.g. 'deepseek', 'kimi', 'codex')",
+          "Profile name from profiles.yaml (e.g. 'deepseek', 'explorer', 'codex')",
         ),
       prompt: z
         .string()

@@ -152,7 +152,7 @@ gera N candidatos com modelos diversos e seleciona o melhor via execução
 de testes no sandbox:
 
 ```bash
-# Via script (ainda não é tool MCP — roadmap)
+# Via tool MCP: archon_run(task="...") — ou via script de eval:
 EVAL_N=5 npx tsx eval/run-eval.ts   # HumanEval
 EVAL_N=5 npx tsx eval/run-mbpp.ts   # MBPP
 ```
@@ -204,7 +204,7 @@ O módulo `prompt-enrichment` cuida disso transparentemente a cada spawn:
 
 | Settings file | Profiles | Pode ler? | Pode grep/git? | Pode editar? |
 |---|---|---|---|---|
-| `deepseek.json` | deepseek, kimi, coder, analyst, *-reviewer (linguagem) | Texto só | Não | Não |
+| `deepseek.json` | deepseek, deepseek-1m, coder, analyst, *-reviewer (linguagem) | Texto só | Não | Não |
 | `deepseek-readonly.json` | explorer, reviewer, researcher, security-reviewer, refactorer | Sim | Sim | Não |
 
 Nenhum profile tem permissão de Write/Edit. Secrets (.env, .pem, .ssh) são

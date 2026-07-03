@@ -47,7 +47,7 @@
 # Prefira SEMPRE o CLI nativo (kimi-agent / codex / openrouter-agent) quando o modelo existe
 # nele: sem proxy, sem API key (kimi = OAuth managed), mais rápido. Use claude-p (API key)
 # APENAS para modelos que existem via API mas NÃO na CLI:
-#   - kimi (kimi-k2.6 general) — o kimi CLI só registra 'kimi-for-coding' (K2.7 Code).
+#   - deepseek-1m (ex-'kimi', renomeado 2026-07-03) — deepseek-v4-pro[1m] via claude-p.
 #   - deepseek / analyst (deepseek-v4-pro) — DeepSeek não tem CLI nativo aqui.
 # Não suba claude-p só para trocar a versão de um modelo que o CLI já oferece.
 #
@@ -72,9 +72,8 @@
 #   - 30% menos tokens de reasoning que K2.6 → pode receber prompts mais densos sem custo extra.
 #   - Ref: https://platform.kimi.ai/docs/guide/prompt-best-practice
 #
-# Kimi K2.6 (API/claude-p — profile 'kimi'):
-#   - Mesmas regras do K2.7 acima; é o general-purpose recomendado pelo Moonshot.
-#   - Bom para conversas longas: se contexto encher, resuma rounds anteriores no system message.
+# (histórico) O profile 'kimi' foi renomeado para 'deepseek-1m' em 2026-07-03:
+#   roda deepseek-v4-pro[1m] via claude-p — vale a guidance do DeepSeek acima.
 #
 # OpenRouter — modelos de reasoning (nex-n2-pro, nemotron):
 #   - Emitem <think> tokens suprimidos via --no-thinking-stdout. Sem guidance específica publicada.
@@ -88,7 +87,7 @@
 #
 # ── Heurística de escolha rápida ──
 #   - deepseek          → default para coding geral, edição e correção com bom custo-benefício.
-#   - kimi              → contexto muito longo, síntese e análise ampla.
+#   - deepseek-1m       → contexto muito longo, síntese e análise ampla.
 #   - explorer          → localizar call sites, writers/readers, imports e dependências.
 #   - reviewer          → revisão independente de diff/código com foco em bugs e regressões.
 #   - coder             → implementar mudanças seguindo padrões já existentes no repo.
@@ -134,7 +133,7 @@ profiles:
     allowed_tools: []
     description: DeepSeek. Default para coding geral, edição e correção com melhor custo-benefício.
 
-  kimi:
+  deepseek-1m:
     invocation: claude-p
     settings: ~/.config/provider-agents/creds/deepseek.json
     model: deepseek-v4-pro[1m]
