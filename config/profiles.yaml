@@ -2,20 +2,29 @@
 #
 # Este arquivo vive no repo provider-agents (config/profiles.yaml) e é lido
 # globalmente via symlink ~/.config/provider-agents/profiles.yaml.
-# Paths de settings/mcp_config são RELATIVOS a este dir (config/) e resolvem
-# via realpath do arquivo — funcionam de qualquer cwd, sem hardcode de máquina.
-# Credenciais ficam em config/creds/*.json (gitignored, chmod 600).
+# Paths de mcp_config (e settings derivado) são RELATIVOS a este dir (config/) e
+# resolvem via realpath do arquivo — funcionam de qualquer cwd, sem hardcode.
 # Origem histórica: deepclaude/.claude/profiles.yaml (cópia congelada lá, não editar mais).
+#
+# ── Modelo de credenciais (provider-agnóstico) ──
+# O token NÃO vive aqui nem nos creds gerados: fica SÓ em config/creds/secrets.json
+# (gitignored, chmod 600), um por provider. Cada profile declara `provider` (chave
+# do registry config/providers.yaml) e `permissions` (preset de config/
+# permission-presets.yaml). O gerador scripts/gen-creds.ts materializa
+# config/creds/<profile>.json contendo APENAS permissions (sem segredo). No spawn,
+# o spawner injeta o env do provider (token + base_url) no process env do filho.
+# Regenerar após editar: npx tsx scripts/gen-creds.ts
 #
 # Cada profile tem invocation: claude-p (default) ou cli.
 #
 # === invocation: claude-p (default) ===
-#   settings         — path absoluto ou ~/ para settings.json com credenciais
+#   provider         — chave do registry (config/providers.yaml), ex: deepseek. Default no spawn: deepseek
+#   permissions      — preset de permissão (no-write | readonly | write-md | full)
+#   settings         — OPCIONAL/derivado: creds/<nome-do-profile>.json (gerado). Raro sobrescrever
 #   model            — model ID
 #   system_prompt    — system prompt (opcional)
 #   bare             — modo isolado, sem hooks/plugins/CLAUDE.md (default: false)
-#   mcp_config       — arquivos .json de MCP servers extras
-#   allowed_tools    — ferramentas permitidas (vazio = todas)
+#   mcp_config       — arquivos .json de MCP servers extras (NÃO cabe no settings.json)
 #   timeout          — timeout em segundos (opcional, default: 300)
 #   description      — descrição humana
 #
@@ -27,7 +36,7 @@
 #   args             — flags extras do comando
 #   timeout          — timeout em segundos (opcional, default: 300)
 #   description      — descrição humana
-#   ⚠️ Não suporta: settings, bare, mcp_config, allowed_tools
+#   ⚠️ Não suporta: provider, permissions, settings, bare, mcp_config
 #
 # Uso: via MCP tools do provider-agents (spawn_agent, list_profiles, suggest_profile).
 #
@@ -35,17 +44,18 @@
 # Definem apenas o PAPEL + regras universais de engenharia. Convenções específicas
 # de cada projeto vêm do CLAUDE.md do repo onde o agente roda, ou do prompt no spawn.
 #
-# ── Guards de segurança ──
-# Anti-edição + anti-leitura de secrets:
-#   - claude-p (TODOS os profiles deste arquivo — deepseek, deepseek-1m, analyst, coder,
-#     explorer, reviewer, researcher, security-reviewer, refactorer, ts/python/csharp-reviewer):
-#     permissions.deny nos settings JSON (creds/deepseek.json ou creds/deepseek-readonly.json)
-#     bloqueia Write/Edit/NotebookEdit e Read de .env/.ssh/.aws/*.pem.
+# ── Guards de segurança (via presets em config/permission-presets.yaml) ──
+# Todo preset nega Read de .env/.ssh/.aws/*.pem/credentials.
+#   - no-write (deepseek, deepseek-1m, coder, analyst, ts/python/csharp/go-reviewer):
+#     nega Write/Edit/NotebookEdit/Bash.
+#   - readonly (explorer, reviewer, researcher, security-reviewer, refactorer):
+#     permite grep/find/git-log/diff/show/blame/ls + Read; nega Write/Edit.
+#   - write-md (memory-writer): EXCEÇÃO — permite Write/Edit APENAS em **/*.md
+#     (notas de decisão) + Read + mkdir/ls; segue negando Read de secrets.
 #   - codex: --sandbox read-only (não escreve no filesystem).
-#   - memory-writer: EXCEÇÃO — creds/deepseek-memory.json permite Write/Edit APENAS
-#     em **/*.md (escreve notas de decisão); segue negando Read de secrets.
+# Token só em config/creds/secrets.json (gitignored, chmod 600). Creds gerados
+# (config/creds/<profile>.json) contêm só permissions — sem segredo.
 # Todos os system prompts reforçam: nunca imprimir/logar secrets.
-# Credenciais em config/creds/*.json (gitignored) com chmod 600.
 #
 # ── Providers ativos ──
 # Todos os profiles rodam DeepSeek V4 Pro via claude-p (API key em creds/*.json),
@@ -104,7 +114,8 @@ profiles:
 
   deepseek:
     invocation: claude-p
-    settings: creds/deepseek.json
+    provider: deepseek
+    permissions: no-write
     model: deepseek-v4-pro[1m]
     color: "#2563EB"
     tags: [coding, editing, fixing, general]
@@ -122,13 +133,12 @@ profiles:
       Adapt to the project's existing language, stack and conventions — infer them from the code, don't assume.
       Never print, echo or log secrets, API keys or tokens — redact them.
       Respond in Portuguese (pt-BR). Keep code identifiers in English.
-    mcp_config: []
-    allowed_tools: []
     description: DeepSeek. Default para coding geral, edição e correção com melhor custo-benefício.
 
   deepseek-1m:
     invocation: claude-p
-    settings: creds/deepseek.json
+    provider: deepseek
+    permissions: no-write
     model: deepseek-v4-pro[1m]
     color: "#10B981"
     tags: [synthesis, analysis, reading, long-context]
@@ -146,8 +156,6 @@ profiles:
       Adapt to the project's existing language, stack and conventions — infer them from the code, don't assume.
       Never print, echo or log secrets, API keys or tokens — redact them.
       Respond in Portuguese (pt-BR). Keep code identifiers in English.
-    mcp_config: []
-    allowed_tools: []
     description: DeepSeek V4 Pro. 1M contexto, leitura, síntese e análise ampla.
 
   # ════════════════════════════════════════════
@@ -156,7 +164,8 @@ profiles:
 
   explorer:
     invocation: claude-p
-    settings: creds/deepseek-readonly.json
+    provider: deepseek
+    permissions: readonly
     model: deepseek-v4-pro[1m]
     color: "#3B82F6"
     tags: [search, grep, call-site, import, dependency, trace, map]
@@ -182,13 +191,13 @@ profiles:
       - Quando solicitado, produza mapa de dependências (quem chama quem).
     mcp_config:
       - semble.mcp.json
-    allowed_tools: []
     timeout: 300
     description: Explorador de código. DeepSeek V4 Pro, busca exaustiva para call sites e fluxo.
 
   reviewer:
     invocation: claude-p
-    settings: creds/deepseek-readonly.json
+    provider: deepseek
+    permissions: readonly
     model: deepseek-v4-pro[1m]
     color: "#F97316"
     tags: [review, bug, quality, diff, regression, code-review]
@@ -229,14 +238,13 @@ profiles:
       ## Formato
       - Responda em português (pt-BR).
       - Por achado: [SEVERIDADE] arquivo:linha — descrição → sugestão de fix.
-    mcp_config: []
-    allowed_tools: []
     timeout: 300
     description: Revisor de código. DeepSeek V4 Pro, revisão independente com foco em bugs e regressões.
 
   coder:
     invocation: claude-p
-    settings: creds/deepseek.json
+    provider: deepseek
+    permissions: no-write
     model: deepseek-v4-pro[1m]
     color: "#22C55E"
     tags: [generate, implement, scaffold, handler, endpoint, test]
@@ -266,14 +274,13 @@ profiles:
 
       ## Formato
       - Responda em português (pt-BR). Código e identifiers em inglês.
-    mcp_config: []
-    allowed_tools: []
     timeout: 300
     description: Implementador de código. DeepSeek V4 Pro, executa mudanças com Write/Bash/Edit (não apenas gera texto).
 
   analyst:
     invocation: claude-p
-    settings: creds/deepseek.json
+    provider: deepseek
+    permissions: no-write
     model: deepseek-v4-pro[1m]
     color: "#0EA5E9"
     tags: [debug, analyze, root-cause, impact, architecture, trade-off]
@@ -287,14 +294,13 @@ profiles:
       You are a senior software analyst. Respond in Portuguese (pt-BR).
       Separate verified facts from hypotheses; if you can't prove a claim, say "not verified".
       Never print, echo or log secrets, API keys or tokens — redact them.
-    mcp_config: []
-    allowed_tools: []
     timeout: 300
     description: Analista sênior. DeepSeek Pro com DeepThink, debugging, RCA e impacto.
 
   researcher:
     invocation: claude-p
-    settings: creds/deepseek-readonly.json
+    provider: deepseek
+    permissions: readonly
     model: deepseek-v4-pro[1m]
     color: "#6366F1"
     tags: [research, compare, library, documentation, alternative]
@@ -327,14 +333,13 @@ profiles:
       - Responda em português (pt-BR).
       - Comece com recomendação curta em 2-3 linhas.
       - Tabela comparativa + ranking final + fontes usadas + open questions.
-    mcp_config: []
-    allowed_tools: []
     timeout: 300
     description: Pesquisador técnico. DeepSeek V4 Pro, comparação de docs e dependências com decisão final.
 
   security-reviewer:
     invocation: claude-p
-    settings: creds/deepseek-readonly.json
+    provider: deepseek
+    permissions: readonly
     model: deepseek-v4-pro[1m]
     color: "#EF4444"
     tags: [security, owasp, vulnerability, secrets, injection, xss, auth, authentication]
@@ -382,14 +387,13 @@ profiles:
       ## Formato
       - Responda em português (pt-BR).
       - Por achado: [SEVERIDADE] arquivo:linha — descrição → sugestão de fix.
-    mcp_config: []
-    allowed_tools: []
     timeout: 300
     description: Revisor de segurança. DeepSeek V4 Pro, OWASP Top 10 e detecção de vulnerabilidades.
 
   refactorer:
     invocation: claude-p
-    settings: creds/deepseek-readonly.json
+    provider: deepseek
+    permissions: readonly
     model: deepseek-v4-pro[1m]
     color: "#F59E0B"
     tags: [refactor, dead-code, cleanup, simplify, unused, consolidate, duplicate]
@@ -429,8 +433,6 @@ profiles:
       ## Formato
       - Responda em português (pt-BR). Código e identifiers em inglês.
       - Liste achados com file:line e categorização de risco.
-    mcp_config: []
-    allowed_tools: []
     timeout: 300
     description: Refatoração e limpeza. DeepSeek V4 Pro, dead code, simplificação e consolidação.
 
@@ -443,7 +445,8 @@ profiles:
 
   ts-reviewer:
     invocation: claude-p
-    settings: creds/deepseek.json
+    provider: deepseek
+    permissions: no-write
     model: deepseek-v4-pro[1m]
     color: "#3178C6"
     tags: [typescript, javascript, review, type-safety, async, promise, xss, injection]
@@ -454,14 +457,13 @@ profiles:
       Use the LSP tool (hover, findReferences, goToDefinition) to verify type claims.
       Separate verified facts from hypotheses; if you can't prove a claim, say "not verified".
       Never print, echo or log secrets, API keys or tokens — redact them.
-    mcp_config: []
-    allowed_tools: []
     timeout: 300
     description: Revisor TypeScript. DeepSeek + LSP + design patterns, type safety e async correctness.
 
   python-reviewer:
     invocation: claude-p
-    settings: creds/deepseek.json
+    provider: deepseek
+    permissions: no-write
     model: deepseek-v4-pro[1m]
     color: "#3776AB"
     tags: [python, review, type-hint, async, injection, import]
@@ -472,14 +474,13 @@ profiles:
       Use the LSP tool (hover, findReferences, goToDefinition) to verify type claims.
       Separate verified facts from hypotheses; if you can't prove a claim, say "not verified".
       Never print, echo or log secrets, API keys or tokens — redact them.
-    mcp_config: []
-    allowed_tools: []
     timeout: 300
     description: Revisor Python. DeepSeek + LSP + design patterns + clean code + unit testing.
 
   csharp-reviewer:
     invocation: claude-p
-    settings: creds/deepseek.json
+    provider: deepseek
+    permissions: no-write
     model: deepseek-v4-pro[1m]
     color: "#512BD4"
     tags: [csharp, dotnet, review, ef-core, async, linq, nullable, injection]
@@ -490,14 +491,13 @@ profiles:
       Use the LSP tool (hover, findReferences, goToDefinition) to verify type claims.
       Separate verified facts from hypotheses; if you can't prove a claim, say "not verified".
       Never print, echo or log secrets, API keys or tokens — redact them.
-    mcp_config: []
-    allowed_tools: []
     timeout: 300
     description: Revisor C#/.NET. DeepSeek + LSP + design patterns + clean architecture.
 
   go-reviewer:
     invocation: claude-p
-    settings: creds/deepseek.json
+    provider: deepseek
+    permissions: no-write
     model: deepseek-v4-pro[1m]
     color: "#00ADD8"
     tags: [go, golang, review, goroutine, channel, error-handling, interface]
@@ -508,8 +508,6 @@ profiles:
       Use the LSP tool (hover, findReferences, goToDefinition) to verify type claims.
       Separate verified facts from hypotheses; if you can't prove a claim, say "not verified".
       Never print, echo or log secrets, API keys or tokens — redact them.
-    mcp_config: []
-    allowed_tools: []
     timeout: 300
     description: Revisor Go. DeepSeek + LSP + design patterns + unit testing.
 
@@ -543,7 +541,8 @@ profiles:
 
   memory-writer:
     invocation: claude-p
-    settings: creds/deepseek-memory.json
+    provider: deepseek
+    permissions: write-md
     model: deepseek-v4-pro
     color: "#A855F7"
     tags: [memory, decision, notes, adr, changelog, documentation]
@@ -575,7 +574,5 @@ profiles:
 
       ## Formato de saída
       - Relatório curto do que foi escrito (path + resumo de 1-2 linhas por arquivo).
-    mcp_config: []
-    allowed_tools: []
     timeout: 180
     description: Escriba de memória. DeepSeek, Write escopado a *.md, registra decisões por projeto.
