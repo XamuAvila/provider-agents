@@ -3,9 +3,9 @@ import { McpServer } from "@modelcontextprotocol/server";
 import { StdioServerTransport } from "@modelcontextprotocol/server";
 import * as z from "zod";
 import { join } from "node:path";
-import { loadMergedConfig, addProjectProfile, removeProjectProfile } from "./config.js";
+import { loadMergedConfig, addProjectProfile, removeProjectProfile, globalConfigDir } from "./config.js";
 import { spawnAgent } from "./spawner.js";
-import { loadProviders, configDir } from "./providers.js";
+import { loadProviders } from "./providers.js";
 import { listSkills, getSkill, getSkillPattern } from "./skills.js";
 import {
   createOutputPath,
@@ -216,7 +216,7 @@ server.registerTool(
 
     // provider is LLM-supplied — validate against the registry (trust boundary).
     if (provider) {
-      const providers = loadProviders(join(configDir(), "providers.yaml"));
+      const providers = loadProviders(join(globalConfigDir(), "providers.yaml"));
       if (!providers[provider]) {
         const known = Object.keys(providers).join(", ");
         return {

@@ -2,11 +2,11 @@ import { spawn as cpSpawn } from "node:child_process";
 import { createWriteStream } from "node:fs";
 import { join } from "node:path";
 import { resolveSkillPaths } from "./skills.js";
+import { globalConfigDir } from "./config.js";
 import {
   resolveProviderEnv,
   loadProviders,
   loadSecrets,
-  configDir,
   type ProviderDef,
 } from "./providers.js";
 import type {
@@ -128,7 +128,7 @@ export async function spawnAgent(
     // Inject the provider env (token + base_url + tuning) into the child's
     // process env. Process env wins over the settings.json env block per the
     // Claude Code docs, and the generated settings hold only `permissions`.
-    const dir = configDir();
+    const dir = globalConfigDir();
     const providers = loadProviders(join(dir, "providers.yaml"));
     const secrets = loadSecrets(join(dir, "creds", "secrets.json"));
     const resolved = resolveSpawnEnv(profile, providerOverride, providers, secrets);

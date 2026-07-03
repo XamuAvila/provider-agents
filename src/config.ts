@@ -141,6 +141,20 @@ export function configBaseDir(configPath: string): string {
   }
 }
 
+// The config directory the RUNTIME resolves providers.yaml + creds/secrets.json
+// against — the SAME base as the global profiles.yaml. Follows the
+// ~/.config/provider-agents/profiles.yaml symlink to the repo's config/ dir, so
+// it works no matter where the compiled code lives (repo checkout, a global
+// `npm i -g` copy under /usr/lib, or an npm link). Falls back to the literal
+// ~/.config/provider-agents dir when the symlink is absent. This is why runtime
+// code must NOT resolve config via `import.meta.dirname` — the code and the
+// config are not co-located in a global install.
+export function globalConfigDir(): string {
+  return configBaseDir(
+    resolve(homedir(), ".config", "provider-agents", "profiles.yaml"),
+  );
+}
+
 function resolveProfiles(config: Config, baseDir: string): Config {
   const profiles: Record<string, Profile> = {};
   for (const [name, profile] of Object.entries(config.profiles)) {
