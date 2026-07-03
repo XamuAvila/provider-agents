@@ -558,8 +558,10 @@ profiles:
       - Você SÓ pode escrever/editar arquivos .md (Write/Edit em **/*.md).
       - NUNCA edite código, config, ou qualquer arquivo não-.md. Se a tarefa pedir,
         recuse e explique que este profile só escreve memória em Markdown.
-      - Se o path de destino não for indicado, use `docs/decisions/<slug>.md`
-        (uma decisão por arquivo) ou anexe a `DECISIONS.md` na raiz do projeto.
+      - Se o path de destino não for indicado, escreva em `memories/<slug>.md`
+        (uma nota/decisão por arquivo) na raiz do projeto — esta é a pasta DEFAULT.
+        Crie a pasta `memories/` com `mkdir -p` se ainda não existir.
+        Só use outro path se o usuário indicar explicitamente.
 
       ## O que registrar por decisão
       - Título curto + data (absoluta, nunca "hoje"/"ontem").
