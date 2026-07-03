@@ -57,6 +57,12 @@ Each `claude-p` profile needs a settings JSON with API credentials:
 | `spawn_agent` | Spawn an isolated agent session with a configured profile |
 | `list_profiles` | List available profiles (global + project merged) |
 | `read_output` | Read previous spawn output or list recent outputs |
+| `add_profile` | Create or update a profile in the project `.claude/profiles.yaml` |
+| `remove_profile` | Remove a profile from the project `.claude/profiles.yaml` |
+| `suggest_profile` | Suggest the best profile for a task description (tag/keyword scoring) |
+| `list_skills` | List reference skills that can be assigned to profiles |
+| `get_skill` | Read a skill's index or a specific pattern file |
+| `archon_run` | Run the Archon inference-time ensemble (generate → verify/test-select) |
 
 ## Profile Schema
 

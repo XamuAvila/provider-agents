@@ -12,6 +12,8 @@ import {
   cleanupOldOutputs,
 } from "./output.js";
 import type { Config, Profile, ClaudePProfile, CliProfile } from "./types.js";
+import { autoAddDir, enrichPrompt } from "./prompt-enrichment.js";
+import { runArchon, DEFAULT_POOLS, resolveVaultDir } from "./archon/index.js";
 
 const server = new McpServer({
   name: "provider-agents",
@@ -208,12 +210,15 @@ server.registerTool(
       profileName,
     );
 
+    const enrichedPrompt = enrichPrompt(prompt, profile.model);
+    const enrichedArgs = autoAddDir(profile.invocation, extra_args, process.cwd());
+
     const result = await spawnAgent(
       profile,
       profileName,
-      prompt,
+      enrichedPrompt,
       outputPath,
-      extra_args,
+      enrichedArgs,
     );
 
     const output = readOutput(result.outputPath);
@@ -406,6 +411,79 @@ server.registerTool(
 
     return {
       content: [{ type: "text" as const, text: lines.join("\n") }],
+    };
+  },
+);
+
+server.registerTool(
+  "archon_run",
+  {
+    title: "Archon Run",
+    description:
+      "Run the Archon inference-time ensemble on a HARD task: diverse generators produce " +
+      "candidates in parallel, then execution-grounded selection (generated unit tests in a " +
+      "sandbox) for code tasks, or fuse/critic/rank/verify for reasoning tasks. " +
+      "Slower and costlier than spawn_agent — use only when a single agent is likely to fail. " +
+      "The task must be self-contained: agents have no conversation context.",
+    inputSchema: z.object({
+      task: z
+        .string()
+        .describe("Self-contained task/problem statement (include code, constraints, examples)"),
+      lang: z
+        .string()
+        .optional()
+        .describe("Sandbox language for code tasks (default: python)"),
+      generators: z
+        .array(z.string())
+        .optional()
+        .describe("Override generator profile names (default: verified free pool + deepseek anchor)"),
+      write_trace: z
+        .boolean()
+        .optional()
+        .describe("Persist a run trace to the Obsidian vault (default: false)"),
+    }),
+  },
+  async ({ task, lang, generators, write_trace }) => {
+    const config = getConfig();
+
+    // LLM-provided profile names cross a trust boundary — validate before spawning.
+    const requested = generators?.length ? generators : DEFAULT_POOLS.generators;
+    const unknown = requested.filter((name) => !config.profiles[name]);
+    if (unknown.length > 0) {
+      const available = Object.keys(config.profiles).join(", ");
+      return {
+        content: [
+          {
+            type: "text" as const,
+            text: `Unknown generator profile(s): ${unknown.join(", ")}. Available: ${available || "none"}`,
+          },
+        ],
+        isError: true,
+      };
+    }
+
+    const pools = generators?.length
+      ? { ...DEFAULT_POOLS, generators }
+      : DEFAULT_POOLS;
+
+    const result = await runArchon(task, {
+      pools,
+      lang,
+      vaultDir: write_trace ? resolveVaultDir(process.env) : undefined,
+    });
+
+    const scores = result.candidates
+      .map((c) => `${c.fromProfile}${c.score !== undefined ? ` score=${c.score}` : ""}`)
+      .join(", ");
+    const header = [
+      `[archon] spec=${result.spec.name} trace=${result.traceId}`,
+      `[archon] candidates: ${scores || "none"}`,
+      "---",
+    ].join("\n");
+
+    return {
+      content: [{ type: "text" as const, text: `${header}\n${result.answer}` }],
+      isError: result.answer.length === 0,
     };
   },
 );
