@@ -16,6 +16,7 @@ import {
 import type { Config, Profile, ClaudePProfile, CliProfile } from "./types.js";
 import { autoAddDir, enrichPrompt } from "./prompt-enrichment.js";
 import { persistMemoryHook } from "./memory-hook.js";
+import { retrieveMemories } from "./memory-retrieval.js";
 import { runArchon, DEFAULT_POOLS, resolveVaultDir } from "./archon/index.js";
 
 const server = new McpServer({
@@ -241,15 +242,22 @@ server.registerTool(
     const enrichedPrompt = enrichPrompt(prompt, profile.model);
     const enrichedArgs = autoAddDir(profile.invocation, extra_args, process.cwd());
 
-    const result = await spawnAgent(
-      profile,
-      profileName,
-      enrichedPrompt,
-      outputPath,
-      enrichedArgs,
-      process.cwd(),
-      provider,
-    );
+    // Run the target agent and the memory recall CONCURRENTLY: the flash
+    // retriever reads memories/ relevant to `prompt` while the target runs, so
+    // recall adds ~0 wall-clock. Recall surfaces to THIS response (the main
+    // conversation) — it is NOT injected into the target agent.
+    const [result, recall] = await Promise.all([
+      spawnAgent(
+        profile,
+        profileName,
+        enrichedPrompt,
+        outputPath,
+        enrichedArgs,
+        process.cwd(),
+        provider,
+      ),
+      retrieveMemories(config, profileName, prompt, process.cwd()),
+    ]);
 
     const output = readOutput(result.outputPath);
 
@@ -264,17 +272,25 @@ server.registerTool(
       process.cwd(),
     );
 
+    const recallState = recall ? (recall.found ? "hit" : "miss") : "skipped";
     const header = [
       `[provider-agents] status=${result.status} exit=${result.exitCode} duration=${Math.round(result.durationMs / 1000)}s`,
       `[provider-agents] profile=${result.profile} model=${result.model}`,
       `[provider-agents] output=${result.outputPath}`,
-      `[provider-agents] auto-memory=${memoryQueued ? "queued" : "skipped"}`,
+      `[provider-agents] auto-memory=${memoryQueued ? "queued" : "skipped"} auto-recall=${recallState}`,
       "---",
     ].join("\n");
 
+    // Surface recalled memories to the main conversation, above the agent
+    // output, only when the retriever found something relevant.
+    const recallBlock =
+      recall?.found
+        ? `[provider-agents] recalled memories (relevant to this task):\n${recall.text}\n---\n`
+        : "";
+
     return {
       content: [
-        { type: "text" as const, text: `${header}\n${output}` },
+        { type: "text" as const, text: `${header}\n${recallBlock}${output}` },
       ],
       isError: result.status !== "ok",
     };
