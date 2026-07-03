@@ -1,6 +1,20 @@
 import { describe, it, expect } from "vitest";
 import { join } from "node:path";
-import { loadConfig, mergeConfigs, resolveProfilePaths } from "../src/config.js";
+import {
+  mkdtempSync,
+  mkdirSync,
+  writeFileSync,
+  symlinkSync,
+  realpathSync,
+} from "node:fs";
+import { tmpdir } from "node:os";
+import {
+  loadConfig,
+  mergeConfigs,
+  resolveProfilePaths,
+  loadMergedConfig,
+  configBaseDir,
+} from "../src/config.js";
 
 const FIXTURES = join(import.meta.dirname, "fixtures");
 
@@ -160,5 +174,60 @@ describe("resolveProfilePaths", () => {
     };
     const resolved = resolveProfilePaths(profile, "/project/root");
     expect(resolved.mcp_config?.[0]).toBe("/abs/semble.mcp.json");
+  });
+});
+
+describe("configBaseDir", () => {
+  it("follows symlinks to the real file's directory", () => {
+    const realDir = realpathSync(mkdtempSync(join(tmpdir(), "pa-real-")));
+    const linkDir = realpathSync(mkdtempSync(join(tmpdir(), "pa-link-")));
+    const realFile = join(realDir, "profiles.yaml");
+    writeFileSync(realFile, "profiles: {}\n");
+    const linkFile = join(linkDir, "profiles.yaml");
+    symlinkSync(realFile, linkFile);
+
+    // A profiles.yaml symlinked into place must resolve its relative paths
+    // against the REAL file's dir (the repo), not the symlink's location.
+    expect(configBaseDir(linkFile)).toBe(realDir);
+  });
+
+  it("falls back to the path's own dir when the file does not exist", () => {
+    expect(configBaseDir("/nonexistent/dir/profiles.yaml")).toBe(
+      "/nonexistent/dir",
+    );
+  });
+});
+
+describe("loadMergedConfig", () => {
+  it("resolves global relative paths against the config file's real dir, not cwd", () => {
+    // Simulate the real setup: repo/config/profiles.yaml with repo-relative
+    // `creds/ds.json`, symlinked from a separate "home config" dir.
+    const repoCfg = realpathSync(mkdtempSync(join(tmpdir(), "pa-repocfg-")));
+    mkdirSync(join(repoCfg, "creds"));
+    writeFileSync(join(repoCfg, "creds", "ds.json"), "{}");
+    writeFileSync(
+      join(repoCfg, "profiles.yaml"),
+      [
+        "profiles:",
+        "  ds:",
+        "    invocation: claude-p",
+        "    settings: creds/ds.json",
+        "    model: deepseek-v4-pro",
+        "    description: t",
+        "",
+      ].join("\n"),
+    );
+    const homeCfg = realpathSync(mkdtempSync(join(tmpdir(), "pa-homecfg-")));
+    const globalLink = join(homeCfg, "profiles.yaml");
+    symlinkSync(join(repoCfg, "profiles.yaml"), globalLink);
+
+    // projectDir is deliberately unrelated to the config dir: proves the
+    // global relative path ignores cwd/projectDir.
+    const projectDir = realpathSync(mkdtempSync(join(tmpdir(), "pa-proj-")));
+    const config = loadMergedConfig(projectDir, globalLink);
+
+    const ds = config.profiles["ds"];
+    const settings = ds.invocation === "claude-p" ? ds.settings : "";
+    expect(settings).toBe(join(repoCfg, "creds", "ds.json"));
   });
 });

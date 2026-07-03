@@ -2,7 +2,9 @@
 #
 # Este arquivo vive no repo provider-agents (config/profiles.yaml) e é lido
 # globalmente via symlink ~/.config/provider-agents/profiles.yaml.
-# Credenciais ficam FORA do repo: ~/.config/provider-agents/creds/*.json (chmod 600).
+# Paths de settings/mcp_config são RELATIVOS a este dir (config/) e resolvem
+# via realpath do arquivo — funcionam de qualquer cwd, sem hardcode de máquina.
+# Credenciais ficam em config/creds/*.json (gitignored, chmod 600).
 # Origem histórica: deepclaude/.claude/profiles.yaml (cópia congelada lá, não editar mais).
 #
 # Cada profile tem invocation: claude-p (default) ou cli.
@@ -42,7 +44,7 @@
 #   - codex: --sandbox read-only (não escreve no filesystem).
 #   - openrouter-*: chat-only (openrouter-cli não tem tools/file access — seguro por natureza).
 # Todos os system prompts reforçam: nunca imprimir/logar secrets.
-# Credenciais em ~/.config/provider-agents/creds/*.json com chmod 600.
+# Credenciais em config/creds/*.json (gitignored) com chmod 600.
 #
 # ── Roteamento: CLI nativo vs claude-p ──
 # Prefira SEMPRE o CLI nativo (kimi-agent / codex / openrouter-agent) quando o modelo existe
@@ -112,7 +114,7 @@ profiles:
 
   deepseek:
     invocation: claude-p
-    settings: ~/.config/provider-agents/creds/deepseek.json
+    settings: creds/deepseek.json
     model: deepseek-v4-pro[1m]
     color: "#2563EB"
     tags: [coding, editing, fixing, general]
@@ -136,7 +138,7 @@ profiles:
 
   deepseek-1m:
     invocation: claude-p
-    settings: ~/.config/provider-agents/creds/deepseek.json
+    settings: creds/deepseek.json
     model: deepseek-v4-pro[1m]
     color: "#10B981"
     tags: [synthesis, analysis, reading, long-context]
@@ -164,7 +166,7 @@ profiles:
 
   explorer:
     invocation: claude-p
-    settings: ~/.config/provider-agents/creds/deepseek-readonly.json
+    settings: creds/deepseek-readonly.json
     model: deepseek-v4-pro[1m]
     color: "#3B82F6"
     tags: [search, grep, call-site, import, dependency, trace, map]
@@ -189,14 +191,14 @@ profiles:
       - Liste achados com file:line e snippet relevante.
       - Quando solicitado, produza mapa de dependências (quem chama quem).
     mcp_config:
-      - ~/.config/provider-agents/semble.mcp.json
+      - semble.mcp.json
     allowed_tools: []
     timeout: 300
     description: Explorador de código. DeepSeek V4 Pro, busca exaustiva para call sites e fluxo.
 
   reviewer:
     invocation: claude-p
-    settings: ~/.config/provider-agents/creds/deepseek-readonly.json
+    settings: creds/deepseek-readonly.json
     model: deepseek-v4-pro[1m]
     color: "#F97316"
     tags: [review, bug, quality, diff, regression, code-review]
@@ -244,7 +246,7 @@ profiles:
 
   coder:
     invocation: claude-p
-    settings: ~/.config/provider-agents/creds/deepseek.json
+    settings: creds/deepseek.json
     model: deepseek-v4-pro[1m]
     color: "#22C55E"
     tags: [generate, implement, scaffold, handler, endpoint, test]
@@ -281,7 +283,7 @@ profiles:
 
   analyst:
     invocation: claude-p
-    settings: ~/.config/provider-agents/creds/deepseek.json
+    settings: creds/deepseek.json
     model: deepseek-v4-pro[1m]
     color: "#0EA5E9"
     tags: [debug, analyze, root-cause, impact, architecture, trade-off]
@@ -302,7 +304,7 @@ profiles:
 
   researcher:
     invocation: claude-p
-    settings: ~/.config/provider-agents/creds/deepseek-readonly.json
+    settings: creds/deepseek-readonly.json
     model: deepseek-v4-pro[1m]
     color: "#6366F1"
     tags: [research, compare, library, documentation, alternative]
@@ -342,7 +344,7 @@ profiles:
 
   security-reviewer:
     invocation: claude-p
-    settings: ~/.config/provider-agents/creds/deepseek-readonly.json
+    settings: creds/deepseek-readonly.json
     model: deepseek-v4-pro[1m]
     color: "#EF4444"
     tags: [security, owasp, vulnerability, secrets, injection, xss, auth, authentication]
@@ -397,7 +399,7 @@ profiles:
 
   refactorer:
     invocation: claude-p
-    settings: ~/.config/provider-agents/creds/deepseek-readonly.json
+    settings: creds/deepseek-readonly.json
     model: deepseek-v4-pro[1m]
     color: "#F59E0B"
     tags: [refactor, dead-code, cleanup, simplify, unused, consolidate, duplicate]
@@ -451,7 +453,7 @@ profiles:
 
   ts-reviewer:
     invocation: claude-p
-    settings: ~/.config/provider-agents/creds/deepseek.json
+    settings: creds/deepseek.json
     model: deepseek-v4-pro[1m]
     color: "#3178C6"
     tags: [typescript, javascript, review, type-safety, async, promise, xss, injection]
@@ -469,7 +471,7 @@ profiles:
 
   python-reviewer:
     invocation: claude-p
-    settings: ~/.config/provider-agents/creds/deepseek.json
+    settings: creds/deepseek.json
     model: deepseek-v4-pro[1m]
     color: "#3776AB"
     tags: [python, review, type-hint, async, injection, import]
@@ -487,7 +489,7 @@ profiles:
 
   csharp-reviewer:
     invocation: claude-p
-    settings: ~/.config/provider-agents/creds/deepseek.json
+    settings: creds/deepseek.json
     model: deepseek-v4-pro[1m]
     color: "#512BD4"
     tags: [csharp, dotnet, review, ef-core, async, linq, nullable, injection]

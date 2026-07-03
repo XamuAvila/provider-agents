@@ -3,6 +3,7 @@ import {
   writeFileSync,
   existsSync,
   mkdirSync,
+  realpathSync,
 } from "node:fs";
 import { resolve, normalize, isAbsolute, dirname } from "node:path";
 import { homedir } from "node:os";
@@ -115,25 +116,49 @@ export function resolveProfilePaths<T extends Profile>(
   return { ...profile, settings, mcp_config } as T;
 }
 
-export function loadMergedConfig(projectDir: string): Config {
-  const globalPath = resolve(
+// Directory a config file's relative settings/mcp_config paths resolve against.
+// Follows symlinks so a profiles.yaml symlinked into place (the global
+// ~/.config/provider-agents/profiles.yaml -> <repo>/config/profiles.yaml)
+// resolves its relative paths against the REAL file's dir (the repo), not the
+// symlink's location. This is what lets the shared, versioned profiles.yaml use
+// repo-relative paths like `creds/deepseek.json` and still resolve correctly
+// from any caller cwd. Falls back to the literal dirname when the file is
+// absent or the symlink is broken.
+export function configBaseDir(configPath: string): string {
+  try {
+    return dirname(realpathSync(configPath));
+  } catch {
+    return dirname(configPath);
+  }
+}
+
+function resolveProfiles(config: Config, baseDir: string): Config {
+  const profiles: Record<string, Profile> = {};
+  for (const [name, profile] of Object.entries(config.profiles)) {
+    profiles[name] = resolveProfilePaths(profile, baseDir);
+  }
+  return { ...config, profiles };
+}
+
+export function loadMergedConfig(
+  projectDir: string,
+  globalPath: string = resolve(
     homedir(),
     ".config",
     "provider-agents",
     "profiles.yaml",
-  );
+  ),
+): Config {
   const projectPath = resolve(projectDir, ".claude", "profiles.yaml");
 
-  const global = loadConfig(globalPath);
-  const project = loadConfig(projectPath);
-  const merged = mergeConfigs(global, project);
+  // Resolve each source's relative paths against its OWN base dir BEFORE merge:
+  //  - global profiles.yaml -> its real directory (the repo, via symlink), so
+  //    shared `creds/x.json` paths resolve into the repo from any cwd.
+  //  - project .claude/profiles.yaml -> the project root (unchanged behavior).
+  const global = resolveProfiles(loadConfig(globalPath), configBaseDir(globalPath));
+  const project = resolveProfiles(loadConfig(projectPath), projectDir);
 
-  const resolved: Record<string, Profile> = {};
-  for (const [name, profile] of Object.entries(merged.profiles)) {
-    resolved[name] = resolveProfilePaths(profile, projectDir);
-  }
-
-  return { ...merged, profiles: resolved };
+  return mergeConfigs(global, project);
 }
 
 function profileToRaw(profile: Profile): Record<string, unknown> {
