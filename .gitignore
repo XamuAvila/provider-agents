@@ -4,6 +4,10 @@ dist/
 *.tgz
 .superpowers/
 
+# Notas de memória geradas por agentes (auto-memory hook) — por-projeto, ruído
+# por sessão; não versionar.
+memories/
+
 # Credenciais dos profiles — NUNCA versionar segredo.
 # Cobre secrets.json (token, a key unificada) E os <profile>.json GERADOS por
 # scripts/gen-creds.ts (só permissions). Só o README.md deste dir é rastreado.
