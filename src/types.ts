@@ -12,6 +12,7 @@ export interface ClaudePProfile {
   color?: string;
   tags?: string[];
   skills?: string[];
+  scripts?: string[];        // registered agent-scripts associated to this profile
 }
 
 export interface CliProfile {
@@ -26,6 +27,7 @@ export interface CliProfile {
   color?: string;
   tags?: string[];
   skills?: string[];
+  scripts?: string[];        // registered agent-scripts associated to this profile
 }
 
 export type Profile = ClaudePProfile | CliProfile;

@@ -51,6 +51,7 @@ function parseProfile(raw: Record<string, unknown>, name: string): Profile {
       color: (raw.color as string) || undefined,
       tags: (raw.tags as string[]) ?? [],
       skills: (raw.skills as string[]) ?? [],
+      scripts: (raw.scripts as string[]) ?? [],
     };
   }
 
@@ -76,6 +77,7 @@ function parseProfile(raw: Record<string, unknown>, name: string): Profile {
     color: (raw.color as string) || undefined,
     tags: (raw.tags as string[]) ?? [],
     skills: (raw.skills as string[]) ?? [],
+    scripts: (raw.scripts as string[]) ?? [],
   };
 }
 
@@ -184,7 +186,7 @@ export function loadMergedConfig(
   return mergeConfigs(global, project);
 }
 
-function profileToRaw(profile: Profile): Record<string, unknown> {
+export function profileToRaw(profile: Profile): Record<string, unknown> {
   const raw: Record<string, unknown> = {
     invocation: profile.invocation,
     model: profile.model,
@@ -195,9 +197,12 @@ function profileToRaw(profile: Profile): Record<string, unknown> {
   if (profile.description) raw.description = profile.description;
 
   if (profile.invocation === "claude-p") {
-    raw.settings = profile.settings;
     if (profile.provider) raw.provider = profile.provider;
     if (profile.permissions) raw.permissions = profile.permissions;
+    // settings is DERIVED from the permissions preset (creds/<preset>.json) at
+    // load time — only persist an EXPLICIT settings path (no preset), so the
+    // curated registry stays free of redundant derived paths.
+    else if (profile.settings) raw.settings = profile.settings;
     if (profile.bare) raw.bare = profile.bare;
     if (profile.mcp_config?.length) raw.mcp_config = profile.mcp_config;
   } else {
@@ -205,6 +210,14 @@ function profileToRaw(profile: Profile): Record<string, unknown> {
     if (profile.stdin) raw.stdin = profile.stdin;
     if (profile.args?.length) raw.args = profile.args;
   }
+
+  // Metadata + physical-folder references shared by both invocation types.
+  // Previously dropped here, which silently wiped skills/tags/color on any
+  // profile round-trip (a real update-loses-data bug).
+  if (profile.color) raw.color = profile.color;
+  if (profile.tags?.length) raw.tags = profile.tags;
+  if (profile.skills?.length) raw.skills = profile.skills;
+  if (profile.scripts?.length) raw.scripts = profile.scripts;
 
   return raw;
 }

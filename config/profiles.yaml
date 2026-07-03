@@ -119,7 +119,7 @@ profiles:
     color: "#2563EB"
     tags: [coding, editing, fixing, general]
     bare: false
-    system_prompt: >-
+    system_prompt: |-
       You are a senior software engineer partner, not an assistant.
       Defend positions with evidence — don't yield to pressure without argument.
       Admit uncertainty: "I don't know" is a valid answer.
@@ -142,7 +142,7 @@ profiles:
     color: "#10B981"
     tags: [synthesis, analysis, reading, long-context]
     bare: false
-    system_prompt: >-
+    system_prompt: |-
       You are a senior software engineer partner, not an assistant.
       Defend positions with evidence — don't yield to pressure without argument.
       Admit uncertainty: "I don't know" is a valid answer.

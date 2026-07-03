@@ -3,9 +3,14 @@ import { McpServer } from "@modelcontextprotocol/server";
 import { StdioServerTransport } from "@modelcontextprotocol/server";
 import * as z from "zod";
 import { join } from "node:path";
-import { loadMergedConfig, addProjectProfile, removeProjectProfile, globalConfigDir } from "./config.js";
+import { loadMergedConfig, globalConfigDir, profileToRaw } from "./config.js";
+import {
+  upsertGlobalProfileRaw,
+  deleteGlobalProfile,
+  readGlobalProfileRaw,
+} from "./registry.js";
 import { spawnAgent } from "./spawner.js";
-import { loadProviders } from "./providers.js";
+import { loadProviders, loadPresets } from "./providers.js";
 import { listSkills, getSkill, getSkillPattern } from "./skills.js";
 import {
   createOutputPath,
@@ -67,9 +72,11 @@ server.registerTool(
 server.registerTool(
   "add_profile",
   {
-    title: "Add Profile",
+    title: "Add / Update Profile",
     description:
-      "Create or update a profile in the project .claude/profiles.yaml. Use invocation=claude-p for Anthropic-compatible APIs (requires settings path), or invocation=cli for standalone CLI tools.",
+      "Create or update an agent profile in the GLOBAL registry (config/profiles.yaml, shared across projects). " +
+      "Comment-preserving. Use invocation=claude-p for Anthropic-compatible APIs, or invocation=cli for standalone CLI tools. " +
+      "Compose the agent via: model, provider, permissions preset (its 'tools'), skills (physical skills/ folders), system_prompt.",
     inputSchema: z.object({
       name: z
         .string()
@@ -82,33 +89,56 @@ server.registerTool(
       settings: z
         .string()
         .optional()
-        .describe("Path to settings.json (claude-p only; derived as creds/<name>.json when omitted)"),
+        .describe("Explicit settings.json path (claude-p only). Omit when using a permissions preset — settings is derived as creds/<preset>.json."),
       provider: z
         .string()
         .optional()
-        .describe("Default provider registry key (claude-p only, e.g. 'deepseek', 'moonshot')"),
+        .describe("Default provider registry key (claude-p only, e.g. 'deepseek', 'moonshot'). Validated against providers.yaml."),
       permissions: z
         .string()
         .optional()
-        .describe("Permission preset name (claude-p only, e.g. 'no-write', 'readonly', 'write-md', 'full')"),
+        .describe("Permission preset = the agent's tools (claude-p only: 'no-write', 'readonly', 'write-md', 'write', 'full'). Validated against permission-presets.yaml."),
       command: z
         .string()
         .optional()
         .describe("CLI binary name or path (cli only, e.g. 'pplx')"),
-      system_prompt: z.string().optional().describe("System prompt text"),
-      bare: z.boolean().optional().describe("Disable hooks/plugins (claude-p only, default: false)"),
+      system_prompt: z.string().optional().describe("System prompt text (the agent's role/instructions)"),
+      bare: z.boolean().optional().describe("Disable hooks/plugins/LSP (claude-p only, default: false)"),
       stdin: z.boolean().optional().describe("Send prompt via stdin (cli only, default: false)"),
       timeout: z.number().int().min(1).optional().describe("Timeout in seconds (default: 300)"),
       mcp_config: z.array(z.string()).optional().describe("Extra MCP config paths (claude-p only)"),
       args: z.array(z.string()).optional().describe("Extra CLI flags (cli only)"),
+      skills: z.array(z.string()).optional().describe("Skill folder names from skills/ (validated). Each becomes an --add-dir for the agent."),
+      tags: z.array(z.string()).optional().describe("Tags for suggest_profile matching"),
+      color: z.string().optional().describe("Hex color for UI (e.g. '#2563EB')"),
     }),
   },
-  async ({ name, invocation, model, description, settings, provider, permissions, command, system_prompt, bare, stdin, timeout, mcp_config, args }) => {
+  async ({ name, invocation, model, description, settings, provider, permissions, command, system_prompt, bare, stdin, timeout, mcp_config, args, skills, tags, color }) => {
     if (invocation === "cli" && !command) {
       return {
         content: [{ type: "text" as const, text: "Error: 'command' is required for invocation=cli." }],
         isError: true,
       };
+    }
+
+    // Validate LLM-supplied references against their registries (trust boundary).
+    const dir = globalConfigDir();
+    const errors: string[] = [];
+    if (provider) {
+      const providers = loadProviders(join(dir, "providers.yaml"));
+      if (!providers[provider]) errors.push(`Unknown provider "${provider}". Known: ${Object.keys(providers).join(", ") || "none"}`);
+    }
+    if (permissions) {
+      const presets = loadPresets(join(dir, "permission-presets.yaml"));
+      if (!presets[permissions]) errors.push(`Unknown permissions preset "${permissions}". Known: ${Object.keys(presets).join(", ") || "none"}`);
+    }
+    if (skills?.length) {
+      const known = new Set(listSkills().map((s) => s.name));
+      const unknown = skills.filter((s) => !known.has(s));
+      if (unknown.length) errors.push(`Unknown skill(s): ${unknown.join(", ")}. Available: ${[...known].join(", ") || "none"}`);
+    }
+    if (errors.length) {
+      return { content: [{ type: "text" as const, text: `Error:\n- ${errors.join("\n- ")}` }], isError: true };
     }
 
     let profile: Profile;
@@ -122,11 +152,15 @@ server.registerTool(
         stdin: stdin ?? false,
         timeout,
         args: args ?? [],
+        skills: skills ?? [],
+        tags: tags ?? [],
+        color: color || undefined,
       } satisfies CliProfile;
     } else {
       profile = {
         invocation: "claude-p",
-        settings: settings ?? `creds/${name}.json`,
+        // Explicit settings wins; otherwise derived at load from the preset.
+        settings: settings ?? (permissions ? `creds/${permissions}.json` : `creds/${name}.json`),
         model,
         provider: provider || undefined,
         permissions: permissions || undefined,
@@ -135,13 +169,16 @@ server.registerTool(
         bare: bare ?? false,
         timeout,
         mcp_config: mcp_config ?? [],
+        skills: skills ?? [],
+        tags: tags ?? [],
+        color: color || undefined,
       } satisfies ClaudePProfile;
     }
 
-    addProjectProfile(process.cwd(), name, profile);
+    const { created } = upsertGlobalProfileRaw(name, profileToRaw(profile));
 
     return {
-      content: [{ type: "text" as const, text: `Profile "${name}" [${invocation}] added/updated in .claude/profiles.yaml` }],
+      content: [{ type: "text" as const, text: `Profile "${name}" [${invocation}] ${created ? "created" : "updated"} in the global registry (config/profiles.yaml).` }],
     };
   },
 );
@@ -150,23 +187,52 @@ server.registerTool(
   "remove_profile",
   {
     title: "Remove Profile",
-    description: "Remove a profile from the project .claude/profiles.yaml.",
+    description: "Remove an agent profile from the GLOBAL registry (config/profiles.yaml). Comment-preserving.",
     inputSchema: z.object({
       name: z.string().describe("Profile name to remove"),
     }),
   },
   async ({ name }) => {
-    const removed = removeProjectProfile(process.cwd(), name);
+    const removed = deleteGlobalProfile(name);
     if (!removed) {
       return {
-        content: [{ type: "text" as const, text: `Profile "${name}" not found in .claude/profiles.yaml.` }],
+        content: [{ type: "text" as const, text: `Profile "${name}" not found in the global registry.` }],
         isError: true,
       };
     }
 
     return {
-      content: [{ type: "text" as const, text: `Profile "${name}" removed from .claude/profiles.yaml.` }],
+      content: [{ type: "text" as const, text: `Profile "${name}" removed from the global registry (config/profiles.yaml).` }],
     };
+  },
+);
+
+server.registerTool(
+  "get_profile",
+  {
+    title: "Get Profile",
+    description:
+      "Read the full definition of one agent profile from the global registry (all fields: model, provider, permissions, system_prompt, skills, tags, etc.). The 'Read' of the profile CRUD.",
+    inputSchema: z.object({
+      name: z.string().describe("Profile name to read"),
+    }),
+  },
+  async ({ name }) => {
+    const raw = readGlobalProfileRaw(name);
+    if (!raw) {
+      const available = Object.keys(getConfig().profiles).join(", ");
+      return {
+        content: [{ type: "text" as const, text: `Profile "${name}" not found in the global registry. Available: ${available || "none"}` }],
+        isError: true,
+      };
+    }
+    // Pretty YAML view of the single profile (source-of-truth shape).
+    const lines = [`# Profile: ${name}`];
+    for (const [k, v] of Object.entries(raw)) {
+      const val = typeof v === "string" && v.includes("\n") ? `|\n    ${v.replace(/\n/g, "\n    ")}` : JSON.stringify(v);
+      lines.push(`${k}: ${val}`);
+    }
+    return { content: [{ type: "text" as const, text: lines.join("\n") }] };
   },
 );
 
