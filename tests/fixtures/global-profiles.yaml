@@ -4,11 +4,11 @@ defaults:
 profiles:
   deepseek:
     invocation: claude-p
-    settings: /home/user/.config/provider-agents/deepseek.json
     model: deepseek-v4-pro
+    provider: deepseek
+    permissions: no-write
     bare: false
     mcp_config: []
-    allowed_tools: []
     description: DeepSeek global profile.
     color: "#2563EB"
     tags: [coding, editing, general]

@@ -1,12 +1,13 @@
 export interface ClaudePProfile {
   invocation: "claude-p";
-  settings: string;
+  settings: string;          // explicit or derived (creds/<name>.json)
   model: string;
+  provider?: string;         // default provider (registry key); default "deepseek" at spawn
+  permissions?: string;      // permission-preset name (no-write | readonly | write-md | full)
   system_prompt?: string;
   bare?: boolean;
   timeout?: number;
-  mcp_config?: string[];
-  allowed_tools?: string[];
+  mcp_config?: string[];     // stays in YAML — cannot live in settings.json
   description: string;
   color?: string;
   tags?: string[];

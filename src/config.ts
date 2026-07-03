@@ -24,7 +24,7 @@ export function loadConfig(filePath: string): Config {
 
   const profiles: Record<string, Profile> = {};
   for (const [name, rawProfile] of Object.entries(raw.profiles ?? {})) {
-    profiles[name] = parseProfile(rawProfile);
+    profiles[name] = parseProfile(rawProfile, name);
   }
 
   return {
@@ -35,7 +35,7 @@ export function loadConfig(filePath: string): Config {
   };
 }
 
-function parseProfile(raw: Record<string, unknown>): Profile {
+function parseProfile(raw: Record<string, unknown>, name: string): Profile {
   const invocation = (raw.invocation as string) ?? "claude-p";
 
   if (invocation === "cli") {
@@ -56,13 +56,14 @@ function parseProfile(raw: Record<string, unknown>): Profile {
 
   return {
     invocation: "claude-p",
-    settings: raw.settings as string,
+    settings: (raw.settings as string) ?? `creds/${name}.json`,
     model: raw.model as string,
+    provider: (raw.provider as string) || undefined,
+    permissions: (raw.permissions as string) || undefined,
     system_prompt: (raw.system_prompt as string) || undefined,
     bare: (raw.bare as boolean) ?? false,
     timeout: raw.timeout as number | undefined,
     mcp_config: (raw.mcp_config as string[]) ?? [],
-    allowed_tools: (raw.allowed_tools as string[]) ?? [],
     description: raw.description as string,
     color: (raw.color as string) || undefined,
     tags: (raw.tags as string[]) ?? [],
@@ -173,10 +174,10 @@ function profileToRaw(profile: Profile): Record<string, unknown> {
 
   if (profile.invocation === "claude-p") {
     raw.settings = profile.settings;
+    if (profile.provider) raw.provider = profile.provider;
+    if (profile.permissions) raw.permissions = profile.permissions;
     if (profile.bare) raw.bare = profile.bare;
     if (profile.mcp_config?.length) raw.mcp_config = profile.mcp_config;
-    if (profile.allowed_tools?.length)
-      raw.allowed_tools = profile.allowed_tools;
   } else {
     raw.command = profile.command;
     if (profile.stdin) raw.stdin = profile.stdin;

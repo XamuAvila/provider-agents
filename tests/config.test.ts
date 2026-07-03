@@ -52,6 +52,24 @@ describe("loadConfig", () => {
   });
 });
 
+describe("parseProfile — provider/permissions/derived settings", () => {
+  it("derives settings path from profile name when omitted", () => {
+    const config = loadConfig(join(FIXTURES, "global-profiles.yaml"));
+    // 'deepseek' fixture profile has no explicit settings; must derive creds/deepseek.json
+    const p = config.profiles["deepseek"];
+    const settings = p.invocation === "claude-p" ? p.settings : "";
+    expect(settings.endsWith("creds/deepseek.json")).toBe(true);
+  });
+
+  it("reads provider and permissions preset", () => {
+    const config = loadConfig(join(FIXTURES, "global-profiles.yaml"));
+    const p = config.profiles["deepseek"];
+    if (p.invocation !== "claude-p") throw new Error("expected claude-p");
+    expect(p.provider).toBe("deepseek");
+    expect(p.permissions).toBe("no-write");
+  });
+});
+
 describe("mergeConfigs", () => {
   it("project profiles override global profiles with same name", () => {
     const global = loadConfig(join(FIXTURES, "global-profiles.yaml"));
