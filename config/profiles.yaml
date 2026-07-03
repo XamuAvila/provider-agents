@@ -29,7 +29,7 @@
 #   description      — descrição humana
 #
 # === invocation: cli ===
-#   command          — binário (ex: pplx, codex exec)
+#   command          — binário (ex: pplx)
 #   model            — model ID
 #   stdin            — passa o prompt via stdin em vez de argumento posicional
 #   system_prompt    — system prompt (opcional)
@@ -53,16 +53,15 @@
 #   - write (coder): EXECUTA — permite Write/Edit/NotebookEdit/Bash/Read; nega secrets.
 #   - write-md (memory-writer): EXCEÇÃO — permite Write/Edit APENAS em **/*.md
 #     (notas de decisão) + Read + mkdir/ls; segue negando Read de secrets.
-#   - codex: --sandbox read-only (não escreve no filesystem).
 # Token só em config/creds/secrets.json (gitignored, chmod 600). Creds gerados
 # (config/creds/<profile>.json) contêm só permissions — sem segredo.
 # Todos os system prompts reforçam: nunca imprimir/logar secrets.
 #
 # ── Providers ativos ──
-# Todos os profiles rodam DeepSeek V4 Pro via claude-p (API key em creds/*.json),
-# exceto `codex` (OpenAI GPT-5.5 via CLI, read-only). Os profiles free do
-# OpenRouter foram removidos (2026-07-03) por baixa confiabilidade (429, modelos
-# mortos); o Archon usa deepseek best-of-N no lugar do ensemble multi-família.
+# Todos os profiles rodam DeepSeek V4 Pro via claude-p (API key em creds/*.json).
+# Os profiles free do OpenRouter foram removidos (2026-07-03) por baixa
+# confiabilidade (429, modelos mortos); o Archon usa deepseek best-of-N no lugar
+# do ensemble multi-família.
 #
 # ── Prompt engineering per modelo ──
 # O orquestrador (Claude) DEVE respeitar estas regras ao montar o prompt de spawn.
@@ -102,7 +101,6 @@
 #   - python-reviewer   → revisão Python com LSP, design patterns e clean code.
 #   - csharp-reviewer   → revisão C# com LSP, clean architecture e design patterns.
 #   - go-reviewer       → revisão Go com LSP, design patterns e unit testing.
-#   - codex             → fallback read-only para inspeção segura.
 #   - memory-writer     → escreve notas de decisão (.md) por projeto. Único com Write.
 
 defaults:
@@ -513,38 +511,18 @@ profiles:
     description: Revisor Go. DeepSeek + LSP + design patterns + unit testing.
 
   # ════════════════════════════════════════════
-  # Perfis base (fallback por modelo)
-  # ════════════════════════════════════════════
-
-  codex:
-    invocation: cli
-    command: codex exec
-    model: gpt-5.5
-    stdin: true
-    color: "#000000"
-    tags: [inspect, read-only, fallback]
-    system_prompt: >-
-      You are a senior software engineer. Adapt to the project's language, stack and conventions — infer them from the code.
-      Handle errors explicitly. Validate input at boundaries. No hardcoded secrets. Prefer immutability.
-      Every claim needs evidence (file:line or command output); say "not verified" when you can't prove it.
-      When a task depends on third-party behavior, cite current official docs and note version mismatches.
-      Never print, echo or log secrets, API keys or tokens — redact them.
-      Respond in Portuguese (pt-BR). Keep code identifiers in English.
-    args: [--sandbox, read-only, --skip-git-repo-check]
-    description: OpenAI Codex CLI. GPT-5.5, fallback read-only para inspeção segura.
-
-  # ════════════════════════════════════════════
   # Memory writer (ÚNICO com permissão de escrita — escopada a *.md)
   # ════════════════════════════════════════════
-  # creds/deepseek-memory.json: allow Write/Edit APENAS em **/*.md; deny secrets.
-  # Escreve notas de decisão por projeto (ex: docs/decisions/*.md, DECISIONS.md).
-  # Low cost: deepseek-v4-pro (sem [1m] — notas não precisam de contexto gigante).
+  # preset write-md: allow Write/Edit APENAS em **/*.md; deny secrets.
+  # Escreve notas de decisão por projeto na pasta default `memories/<slug>.md`.
+  # Low cost: deepseek-v4-flash — modelo mais barato/rápido; notas são curtas e
+  # não precisam do reasoning/contexto do -pro.
 
   memory-writer:
     invocation: claude-p
     provider: deepseek
     permissions: write-md
-    model: deepseek-v4-pro
+    model: deepseek-v4-flash
     color: "#A855F7"
     tags: [memory, decision, notes, adr, changelog, documentation]
     bare: true
