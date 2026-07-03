@@ -46,10 +46,11 @@
 #
 # ── Guards de segurança (via presets em config/permission-presets.yaml) ──
 # Todo preset nega Read de .env/.ssh/.aws/*.pem/credentials.
-#   - no-write (deepseek, deepseek-1m, coder, analyst, ts/python/csharp/go-reviewer):
+#   - no-write (deepseek, deepseek-1m, analyst, ts/python/csharp/go-reviewer):
 #     nega Write/Edit/NotebookEdit/Bash.
 #   - readonly (explorer, reviewer, researcher, security-reviewer, refactorer):
 #     permite grep/find/git-log/diff/show/blame/ls + Read; nega Write/Edit.
+#   - write (coder): EXECUTA — permite Write/Edit/NotebookEdit/Bash/Read; nega secrets.
 #   - write-md (memory-writer): EXCEÇÃO — permite Write/Edit APENAS em **/*.md
 #     (notas de decisão) + Read + mkdir/ls; segue negando Read de secrets.
 #   - codex: --sandbox read-only (não escreve no filesystem).
@@ -244,7 +245,7 @@ profiles:
   coder:
     invocation: claude-p
     provider: deepseek
-    permissions: no-write
+    permissions: write
     model: deepseek-v4-pro[1m]
     color: "#22C55E"
     tags: [generate, implement, scaffold, handler, endpoint, test]

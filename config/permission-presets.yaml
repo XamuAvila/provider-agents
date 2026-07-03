@@ -62,6 +62,26 @@ presets:
       - Read(**/.aws/**)
       - Read(**/.ssh/**)
       - Read(**/credentials)
+  # write: implementador que EXECUTA — Write/Edit/Bash/Read liberados; secrets negados.
+  # deny sempre vence, então a leitura de .env/.ssh/.aws/*.pem segue bloqueada.
+  write:
+    allow:
+      - Write
+      - Edit
+      - NotebookEdit
+      - Read
+      - Bash
+    deny:
+      - Read(./.env)
+      - Read(./.env.*)
+      - Read(**/.env)
+      - Read(**/.env.*)
+      - Read(**/*.pem)
+      - Read(**/id_rsa)
+      - Read(**/id_ed25519)
+      - Read(**/.aws/**)
+      - Read(**/.ssh/**)
+      - Read(**/credentials)
   full:
     deny:
       - Read(./.env)

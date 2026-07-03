@@ -40,4 +40,13 @@ describe("config/permission-presets.yaml", () => {
     expect(raw.presets["readonly"].allow).toContain("Read");
     expect(raw.presets["write-md"].allow).toContain("Write(**/*.md)");
   });
+
+  it("defines a write preset that allows Write/Bash but denies secrets", () => {
+    const raw = yaml.load(
+      readFileSync(join(CONFIG, "permission-presets.yaml"), "utf-8"),
+    ) as { presets: Record<string, { allow?: string[]; deny?: string[] }> };
+    expect(raw.presets["write"].allow).toContain("Write");
+    expect(raw.presets["write"].allow).toContain("Bash");
+    expect(raw.presets["write"].deny).toContain("Read(**/.env)");
+  });
 });
