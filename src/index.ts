@@ -13,6 +13,14 @@ import { spawnAgent } from "./spawner.js";
 import { loadProviders, loadPresets } from "./providers.js";
 import { listSkills, getSkill, getSkillPattern } from "./skills.js";
 import {
+  listScripts,
+  getScript,
+  writeScript,
+  removeScript,
+  scriptExists,
+  runScript,
+} from "./scripts.js";
+import {
   createOutputPath,
   readOutput,
   listOutputs,
@@ -109,11 +117,12 @@ server.registerTool(
       mcp_config: z.array(z.string()).optional().describe("Extra MCP config paths (claude-p only)"),
       args: z.array(z.string()).optional().describe("Extra CLI flags (cli only)"),
       skills: z.array(z.string()).optional().describe("Skill folder names from skills/ (validated). Each becomes an --add-dir for the agent."),
+      scripts: z.array(z.string()).optional().describe("Registered agent-script filenames from agent-scripts/ (validated) to associate with this profile."),
       tags: z.array(z.string()).optional().describe("Tags for suggest_profile matching"),
       color: z.string().optional().describe("Hex color for UI (e.g. '#2563EB')"),
     }),
   },
-  async ({ name, invocation, model, description, settings, provider, permissions, command, system_prompt, bare, stdin, timeout, mcp_config, args, skills, tags, color }) => {
+  async ({ name, invocation, model, description, settings, provider, permissions, command, system_prompt, bare, stdin, timeout, mcp_config, args, skills, scripts, tags, color }) => {
     if (invocation === "cli" && !command) {
       return {
         content: [{ type: "text" as const, text: "Error: 'command' is required for invocation=cli." }],
@@ -137,6 +146,10 @@ server.registerTool(
       const unknown = skills.filter((s) => !known.has(s));
       if (unknown.length) errors.push(`Unknown skill(s): ${unknown.join(", ")}. Available: ${[...known].join(", ") || "none"}`);
     }
+    if (scripts?.length) {
+      const unknown = scripts.filter((s) => !scriptExists(s));
+      if (unknown.length) errors.push(`Unknown script(s): ${unknown.join(", ")}. Register them first (register_script) or list with list_scripts.`);
+    }
     if (errors.length) {
       return { content: [{ type: "text" as const, text: `Error:\n- ${errors.join("\n- ")}` }], isError: true };
     }
@@ -153,6 +166,7 @@ server.registerTool(
         timeout,
         args: args ?? [],
         skills: skills ?? [],
+        scripts: scripts ?? [],
         tags: tags ?? [],
         color: color || undefined,
       } satisfies CliProfile;
@@ -170,6 +184,7 @@ server.registerTool(
         timeout,
         mcp_config: mcp_config ?? [],
         skills: skills ?? [],
+        scripts: scripts ?? [],
         tags: tags ?? [],
         color: color || undefined,
       } satisfies ClaudePProfile;
@@ -412,6 +427,120 @@ server.registerTool(
     return {
       content: [{ type: "text" as const, text: lines.join("\n") }],
     };
+  },
+);
+
+const SCRIPT_EXEC_ENV = "PROVIDER_AGENTS_ALLOW_SCRIPT_EXEC";
+const SCRIPT_EXEC_DISABLED = new Set(["", "0", "false", "off", "no"]);
+
+server.registerTool(
+  "register_script",
+  {
+    title: "Register Script",
+    description:
+      "Create or overwrite an executable agent-script in agent-scripts/ (chmod +x). " +
+      "Include a shebang (e.g. '#!/usr/bin/env bash'); a leading '# description: ...' line is shown by list_scripts. " +
+      "Associate it with profiles via add_profile(scripts=[...]). Runnable via run_script (exec is env-gated).",
+    inputSchema: z.object({
+      name: z.string().describe("Plain filename incl. extension (e.g. 'backup.sh'). No path separators or '..'."),
+      content: z.string().describe("Full script source. Start with a shebang so it can be executed directly."),
+    }),
+  },
+  async ({ name, content }) => {
+    try {
+      const info = writeScript(name, content);
+      return { content: [{ type: "text" as const, text: `Script "${info.name}" registered (${info.sizeBytes} B, chmod +x) at ${info.path}` }] };
+    } catch (e: unknown) {
+      return { content: [{ type: "text" as const, text: `Error: ${e instanceof Error ? e.message : String(e)}` }], isError: true };
+    }
+  },
+);
+
+server.registerTool(
+  "list_scripts",
+  {
+    title: "List Scripts",
+    description: "List registered agent-scripts (name, size, description) from agent-scripts/.",
+    inputSchema: z.object({}),
+  },
+  async () => {
+    const scripts = listScripts();
+    if (scripts.length === 0) {
+      return { content: [{ type: "text" as const, text: "No scripts registered. Create one with register_script." }] };
+    }
+    const lines = scripts.map((s) => `${s.name} (${(s.sizeBytes / 1024).toFixed(1)}KB)${s.description ? ` — ${s.description}` : ""}`);
+    return { content: [{ type: "text" as const, text: lines.join("\n") }] };
+  },
+);
+
+server.registerTool(
+  "get_script",
+  {
+    title: "Get Script",
+    description: "Read the source of a registered agent-script.",
+    inputSchema: z.object({ name: z.string().describe("Script filename (e.g. 'backup.sh')") }),
+  },
+  async ({ name }) => {
+    try {
+      const content = getScript(name);
+      if (content === null) {
+        return { content: [{ type: "text" as const, text: `Script "${name}" not found. List with list_scripts.` }], isError: true };
+      }
+      return { content: [{ type: "text" as const, text: content }] };
+    } catch (e: unknown) {
+      return { content: [{ type: "text" as const, text: `Error: ${e instanceof Error ? e.message : String(e)}` }], isError: true };
+    }
+  },
+);
+
+server.registerTool(
+  "remove_script",
+  {
+    title: "Remove Script",
+    description: "Delete a registered agent-script from agent-scripts/.",
+    inputSchema: z.object({ name: z.string().describe("Script filename to remove") }),
+  },
+  async ({ name }) => {
+    try {
+      const removed = removeScript(name);
+      return {
+        content: [{ type: "text" as const, text: removed ? `Script "${name}" removed.` : `Script "${name}" not found.` }],
+        isError: !removed,
+      };
+    } catch (e: unknown) {
+      return { content: [{ type: "text" as const, text: `Error: ${e instanceof Error ? e.message : String(e)}` }], isError: true };
+    }
+  },
+);
+
+server.registerTool(
+  "run_script",
+  {
+    title: "Run Script",
+    description:
+      "Execute a registered agent-script and capture its output. SECURITY: this runs code, so it is DISABLED unless " +
+      `env ${SCRIPT_EXEC_ENV} is set to a truthy value. Only files registered in agent-scripts/ can run (no arbitrary paths).`,
+    inputSchema: z.object({
+      name: z.string().describe("Registered script filename to execute (e.g. 'backup.sh')"),
+      args: z.array(z.string()).optional().describe("Arguments passed to the script"),
+    }),
+  },
+  async ({ name, args }) => {
+    const gate = (process.env[SCRIPT_EXEC_ENV] ?? "").trim().toLowerCase();
+    if (SCRIPT_EXEC_DISABLED.has(gate)) {
+      return {
+        content: [{ type: "text" as const, text: `Script execution is disabled. Set ${SCRIPT_EXEC_ENV}=1 in the MCP env to enable run_script.` }],
+        isError: true,
+      };
+    }
+    try {
+      const r = await runScript(name, args ?? [], { cwd: process.cwd() });
+      const header = `[run_script] name=${name} status=${r.status} exit=${r.exitCode}`;
+      const body = [r.stdout && `--- stdout ---\n${r.stdout}`, r.stderr && `--- stderr ---\n${r.stderr}`].filter(Boolean).join("\n");
+      return { content: [{ type: "text" as const, text: `${header}\n${body}` }], isError: r.status !== "ok" };
+    } catch (e: unknown) {
+      return { content: [{ type: "text" as const, text: `Error: ${e instanceof Error ? e.message : String(e)}` }], isError: true };
+    }
   },
 );
 
