@@ -90,6 +90,16 @@ function expandHome(p: string): string {
   return p;
 }
 
+// Expand ~, then make absolute against baseDir if relative, then normalize.
+// Shared by `settings` and every `mcp_config` entry so all profile paths
+// resolve identically — claude-p receives them as raw CLI args (no shell
+// expansion), so an unexpanded ~ would be resolved against cwd and break.
+function resolvePath(p: string, baseDir: string): string {
+  const expanded = expandHome(p);
+  const absolute = isAbsolute(expanded) ? expanded : resolve(baseDir, expanded);
+  return normalize(absolute);
+}
+
 export function resolveProfilePaths<T extends Profile>(
   profile: T,
   baseDir: string,
@@ -99,13 +109,10 @@ export function resolveProfilePaths<T extends Profile>(
   }
 
   const cp = profile as ClaudePProfile;
-  let settings = expandHome(cp.settings);
-  if (!isAbsolute(settings)) {
-    settings = resolve(baseDir, settings);
-  }
-  settings = normalize(settings);
+  const settings = resolvePath(cp.settings, baseDir);
+  const mcp_config = (cp.mcp_config ?? []).map((p) => resolvePath(p, baseDir));
 
-  return { ...profile, settings } as T;
+  return { ...profile, settings, mcp_config } as T;
 }
 
 export function loadMergedConfig(projectDir: string): Config {

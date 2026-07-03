@@ -122,4 +122,43 @@ describe("resolveProfilePaths", () => {
     const resolved = resolveProfilePaths(profile, "/project/root");
     expect(resolved).toEqual(profile);
   });
+
+  it("expands ~ in mcp_config paths", () => {
+    const profile = {
+      invocation: "claude-p" as const,
+      settings: "/abs/settings.json",
+      model: "deepseek-v4-pro",
+      description: "test",
+      mcp_config: ["~/.config/provider-agents/semble.mcp.json"],
+    };
+    const resolved = resolveProfilePaths(profile, "/project/root");
+    expect(resolved.mcp_config?.[0]).not.toContain("~");
+    expect(resolved.mcp_config?.[0]).toMatch(/^\/home\/.*semble\.mcp\.json$/);
+  });
+
+  it("resolves relative mcp_config paths against base dir", () => {
+    const profile = {
+      invocation: "claude-p" as const,
+      settings: "/abs/settings.json",
+      model: "deepseek-v4-pro",
+      description: "test",
+      mcp_config: [".claude/semble.mcp.json"],
+    };
+    const resolved = resolveProfilePaths(profile, "/project/root");
+    expect(resolved.mcp_config?.[0]).toBe(
+      "/project/root/.claude/semble.mcp.json",
+    );
+  });
+
+  it("leaves absolute mcp_config paths unchanged", () => {
+    const profile = {
+      invocation: "claude-p" as const,
+      settings: "/abs/settings.json",
+      model: "deepseek-v4-pro",
+      description: "test",
+      mcp_config: ["/abs/semble.mcp.json"],
+    };
+    const resolved = resolveProfilePaths(profile, "/project/root");
+    expect(resolved.mcp_config?.[0]).toBe("/abs/semble.mcp.json");
+  });
 });
