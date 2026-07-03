@@ -15,6 +15,7 @@ import {
 } from "./output.js";
 import type { Config, Profile, ClaudePProfile, CliProfile } from "./types.js";
 import { autoAddDir, enrichPrompt } from "./prompt-enrichment.js";
+import { persistMemoryHook } from "./memory-hook.js";
 import { runArchon, DEFAULT_POOLS, resolveVaultDir } from "./archon/index.js";
 
 const server = new McpServer({
@@ -71,7 +72,7 @@ server.registerTool(
     inputSchema: z.object({
       name: z
         .string()
-        .describe("Profile name (e.g. 'deepseek', 'explorer', 'codex')"),
+        .describe("Profile name (e.g. 'deepseek', 'explorer', 'memory-writer')"),
       invocation: z
         .enum(["claude-p", "cli"])
         .describe("Invocation type: claude-p for Anthropic-compatible APIs, cli for standalone binaries"),
@@ -92,7 +93,7 @@ server.registerTool(
       command: z
         .string()
         .optional()
-        .describe("CLI binary name or path (cli only, e.g. 'codex exec')"),
+        .describe("CLI binary name or path (cli only, e.g. 'pplx')"),
       system_prompt: z.string().optional().describe("System prompt text"),
       bare: z.boolean().optional().describe("Disable hooks/plugins (claude-p only, default: false)"),
       stdin: z.boolean().optional().describe("Send prompt via stdin (cli only, default: false)"),
@@ -178,7 +179,7 @@ server.registerTool(
       profile: z
         .string()
         .describe(
-          "Profile name from profiles.yaml (e.g. 'deepseek', 'explorer', 'codex')",
+          "Profile name from profiles.yaml (e.g. 'deepseek', 'explorer', 'memory-writer')",
         ),
       prompt: z
         .string()
@@ -252,10 +253,22 @@ server.registerTool(
 
     const output = readOutput(result.outputPath);
 
+    // Fire-and-forget: after a successful non-memory delegation, the flash
+    // scribe persists a durable note. Passes the ORIGINAL prompt (not the
+    // enriched one) as the task and points the scribe at result.outputPath.
+    const memoryQueued = persistMemoryHook(
+      config,
+      profileName,
+      prompt,
+      result,
+      process.cwd(),
+    );
+
     const header = [
       `[provider-agents] status=${result.status} exit=${result.exitCode} duration=${Math.round(result.durationMs / 1000)}s`,
       `[provider-agents] profile=${result.profile} model=${result.model}`,
       `[provider-agents] output=${result.outputPath}`,
+      `[provider-agents] auto-memory=${memoryQueued ? "queued" : "skipped"}`,
       "---",
     ].join("\n");
 
@@ -518,8 +531,14 @@ server.registerTool(
 );
 
 async function main() {
+  // NB: never write to stdout here — the StdioServerTransport carries the
+  // JSON-RPC protocol on stdout, so any console.log corrupts the stream.
+  // Diagnostics must go to stderr (console.error).
   const transport = new StdioServerTransport();
   await server.connect(transport);
 }
 
-main();
+main().catch((e) => {
+  console.error("provider-agents: error", e);
+  process.exit(1);
+});
