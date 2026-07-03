@@ -2,8 +2,10 @@
 import { McpServer } from "@modelcontextprotocol/server";
 import { StdioServerTransport } from "@modelcontextprotocol/server";
 import * as z from "zod";
+import { join } from "node:path";
 import { loadMergedConfig, addProjectProfile, removeProjectProfile } from "./config.js";
 import { spawnAgent } from "./spawner.js";
+import { loadProviders, configDir } from "./providers.js";
 import { listSkills, getSkill, getSkillPattern } from "./skills.js";
 import {
   createOutputPath,
@@ -78,7 +80,15 @@ server.registerTool(
       settings: z
         .string()
         .optional()
-        .describe("Path to settings.json with API credentials (claude-p only)"),
+        .describe("Path to settings.json (claude-p only; derived as creds/<name>.json when omitted)"),
+      provider: z
+        .string()
+        .optional()
+        .describe("Default provider registry key (claude-p only, e.g. 'deepseek', 'moonshot')"),
+      permissions: z
+        .string()
+        .optional()
+        .describe("Permission preset name (claude-p only, e.g. 'no-write', 'readonly', 'write-md', 'full')"),
       command: z
         .string()
         .optional()
@@ -88,17 +98,10 @@ server.registerTool(
       stdin: z.boolean().optional().describe("Send prompt via stdin (cli only, default: false)"),
       timeout: z.number().int().min(1).optional().describe("Timeout in seconds (default: 300)"),
       mcp_config: z.array(z.string()).optional().describe("Extra MCP config paths (claude-p only)"),
-      allowed_tools: z.array(z.string()).optional().describe("Restrict available tools (claude-p only)"),
       args: z.array(z.string()).optional().describe("Extra CLI flags (cli only)"),
     }),
   },
-  async ({ name, invocation, model, description, settings, command, system_prompt, bare, stdin, timeout, mcp_config, allowed_tools, args }) => {
-    if (invocation === "claude-p" && !settings) {
-      return {
-        content: [{ type: "text" as const, text: "Error: 'settings' is required for invocation=claude-p." }],
-        isError: true,
-      };
-    }
+  async ({ name, invocation, model, description, settings, provider, permissions, command, system_prompt, bare, stdin, timeout, mcp_config, args }) => {
     if (invocation === "cli" && !command) {
       return {
         content: [{ type: "text" as const, text: "Error: 'command' is required for invocation=cli." }],
@@ -121,14 +124,15 @@ server.registerTool(
     } else {
       profile = {
         invocation: "claude-p",
-        settings: settings!,
+        settings: settings ?? `creds/${name}.json`,
         model,
+        provider: provider || undefined,
+        permissions: permissions || undefined,
         description,
         system_prompt: system_prompt || undefined,
         bare: bare ?? false,
         timeout,
         mcp_config: mcp_config ?? [],
-        allowed_tools: allowed_tools ?? [],
       } satisfies ClaudePProfile;
     }
 
@@ -185,9 +189,15 @@ server.registerTool(
         .describe(
           "Extra CLI flags passed to claude -p (e.g. ['--add-dir', './src']). Ignored for cli invocation.",
         ),
+      provider: z
+        .string()
+        .optional()
+        .describe(
+          "Provider registry key to run this profile against (e.g. 'deepseek', 'moonshot'). Omit to use the profile's default provider.",
+        ),
     }),
   },
-  async ({ profile: profileName, prompt, extra_args }) => {
+  async ({ profile: profileName, prompt, extra_args, provider }) => {
     const config = getConfig();
     const profile = config.profiles[profileName];
 
@@ -202,6 +212,23 @@ server.registerTool(
         ],
         isError: true,
       };
+    }
+
+    // provider is LLM-supplied — validate against the registry (trust boundary).
+    if (provider) {
+      const providers = loadProviders(join(configDir(), "providers.yaml"));
+      if (!providers[provider]) {
+        const known = Object.keys(providers).join(", ");
+        return {
+          content: [
+            {
+              type: "text" as const,
+              text: `Unknown provider "${provider}". Known: ${known || "none"}`,
+            },
+          ],
+          isError: true,
+        };
+      }
     }
 
     cleanupOldOutputs(config.defaults.output_dir, 7);
@@ -219,6 +246,8 @@ server.registerTool(
       enrichedPrompt,
       outputPath,
       enrichedArgs,
+      process.cwd(),
+      provider,
     );
 
     const output = readOutput(result.outputPath);
