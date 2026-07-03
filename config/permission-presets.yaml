@@ -1,0 +1,76 @@
+# Presets de permissão por PAPEL (não por provider). Derivados 1-para-1 dos
+# creds atuais. O deny de leitura de secrets aparece em TODOS os presets.
+# Consumido pelo gerador (scripts/gen-creds.ts) para montar creds/<profile>.json
+# (só permissions — sem segredo). Regenerar: npx tsx scripts/gen-creds.ts
+presets:
+  no-write:
+    deny:
+      - Write
+      - Edit
+      - NotebookEdit
+      - Bash
+      - Read(./.env)
+      - Read(./.env.*)
+      - Read(**/.env)
+      - Read(**/.env.*)
+      - Read(**/*.pem)
+      - Read(**/id_rsa)
+      - Read(**/id_ed25519)
+      - Read(**/.aws/**)
+      - Read(**/.ssh/**)
+      - Read(**/credentials)
+  readonly:
+    allow:
+      - Bash(grep:*)
+      - Bash(find:*)
+      - Bash(wc:*)
+      - Bash(git log:*)
+      - Bash(git diff:*)
+      - Bash(git show:*)
+      - Bash(git blame:*)
+      - Bash(ls:*)
+      - Read
+    deny:
+      - Write
+      - Edit
+      - NotebookEdit
+      - Read(./.env)
+      - Read(./.env.*)
+      - Read(**/.env)
+      - Read(**/.env.*)
+      - Read(**/*.pem)
+      - Read(**/id_rsa)
+      - Read(**/id_ed25519)
+      - Read(**/.aws/**)
+      - Read(**/.ssh/**)
+      - Read(**/credentials)
+  write-md:
+    allow:
+      - Write(**/*.md)
+      - Edit(**/*.md)
+      - Read
+      - Bash(mkdir:*)
+      - Bash(ls:*)
+    deny:
+      - Read(./.env)
+      - Read(./.env.*)
+      - Read(**/.env)
+      - Read(**/.env.*)
+      - Read(**/*.pem)
+      - Read(**/id_rsa)
+      - Read(**/id_ed25519)
+      - Read(**/.aws/**)
+      - Read(**/.ssh/**)
+      - Read(**/credentials)
+  full:
+    deny:
+      - Read(./.env)
+      - Read(./.env.*)
+      - Read(**/.env)
+      - Read(**/.env.*)
+      - Read(**/*.pem)
+      - Read(**/id_rsa)
+      - Read(**/id_ed25519)
+      - Read(**/.aws/**)
+      - Read(**/.ssh/**)
+      - Read(**/credentials)

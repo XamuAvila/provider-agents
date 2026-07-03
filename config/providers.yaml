@@ -1,0 +1,32 @@
+# Provider registry (NÃO-secreto, versionado).
+# base_url + model default + env de tuning por provider. O TOKEN não vive aqui —
+# fica em config/creds/secrets.json (gitignored, chmod 600). O gerador
+# (scripts/gen-creds.ts) NÃO lê este arquivo; o spawner lê base_url/env daqui e o
+# token do secrets.json, injetando tudo no process env do filho no spawn.
+#
+# `model` é o default usado quando o provider é escolhido explicitamente no spawn
+# (spawn_agent(..., provider="moonshot")) — nesse caso o profile.model é
+# provider-específico e não vale mais.
+#
+# `env` carrega SÓ tuning não-secreto (copiado verbatim dos creds atuais, menos o
+# token). ANTHROPIC_MODEL é intencionalmente OMITIDO: o model vem do flag --model,
+# e setar a env var conflitaria com o flag.
+providers:
+  deepseek:
+    base_url: https://api.deepseek.com/anthropic
+    model: "deepseek-v4-pro[1m]"
+    env:
+      ANTHROPIC_DEFAULT_HAIKU_MODEL: "deepseek-v4-pro[1m]"
+      ANTHROPIC_DEFAULT_SONNET_MODEL: "deepseek-v4-pro[1m]"
+      ANTHROPIC_DEFAULT_OPUS_MODEL: "deepseek-v4-pro[1m]"
+      CLAUDE_CODE_SUBAGENT_MODEL: "deepseek-v4-pro[1m]"
+      CLAUDE_CODE_EFFORT_LEVEL: max
+  moonshot:
+    base_url: https://api.moonshot.ai/anthropic
+    model: kimi-k2.6
+    env:
+      ANTHROPIC_DEFAULT_HAIKU_MODEL: kimi-k2.6
+      ANTHROPIC_DEFAULT_SONNET_MODEL: kimi-k2.6
+      ANTHROPIC_DEFAULT_OPUS_MODEL: kimi-k2.6
+      CLAUDE_CODE_SUBAGENT_MODEL: kimi-k2.6
+      ENABLE_TOOL_SEARCH: "false"
