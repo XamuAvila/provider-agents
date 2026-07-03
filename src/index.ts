@@ -20,7 +20,7 @@ import { runArchon, DEFAULT_POOLS, resolveVaultDir } from "./archon/index.js";
 
 const server = new McpServer({
   name: "provider-agents",
-  version: "0.1.0",
+  version: "0.2.0",
 });
 
 function getConfig(): Config {
