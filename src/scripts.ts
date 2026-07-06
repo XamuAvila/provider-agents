@@ -137,6 +137,26 @@ export function resolveScriptPaths(names: string[], dir: string = SCRIPTS_DIR): 
     .filter((p) => existsSync(p));
 }
 
+export function appendScriptReferences(
+  prompt: string,
+  names: string[],
+  dir: string = SCRIPTS_DIR,
+): string {
+  const known = new Map(listScripts(dir).map((script) => [script.name, script]));
+  const references = names.flatMap((name) => {
+    const script = known.get(name);
+    return script ? [`- ${script.name}: ${script.path}${script.description ? ` — ${script.description}` : ""}`] : [];
+  });
+  if (references.length === 0) return prompt;
+  return [
+    prompt,
+    "",
+    "[Registered deterministic scripts available for this profile]",
+    ...references,
+    "Inspect usage before execution. Execute only when profile permissions and task scope allow it.",
+  ].join("\n");
+}
+
 /**
  * Execute a registered script by name, capturing stdout/stderr. The file must
  * exist in agent-scripts/ and carry its own shebang; it is spawned directly, so

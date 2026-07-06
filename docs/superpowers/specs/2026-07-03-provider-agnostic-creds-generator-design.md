@@ -121,7 +121,7 @@ Para cada profile `claude-p` em `profiles.yaml`:
   (**só permissions — sem env, sem segredo**);
 - `chmod 600`.
 - **Nunca imprime tokens.** Reporta só nomes de arquivo escritos.
-- Profiles `cli` (codex) são ignorados (não têm settings/provider).
+- Profiles `cli` são ignorados (não têm settings/provider).
 
 **5. `profiles.yaml`** (mudanças por profile `claude-p`):
 - **adiciona** `provider: deepseek` (default) e `permissions: <preset>`;

@@ -10,7 +10,7 @@ import {
   readGlobalProfileRaw,
 } from "./registry.js";
 import { spawnAgent } from "./spawner.js";
-import { loadProviders, loadPresets } from "./providers.js";
+import { loadProviders, loadPresets, validateProviderModel } from "./providers.js";
 import { listSkills, getSkill, getSkillPattern } from "./skills.js";
 import {
   listScripts,
@@ -31,6 +31,7 @@ import { autoAddDir, enrichPrompt } from "./prompt-enrichment.js";
 import { persistMemoryHook } from "./memory-hook.js";
 import { retrieveMemories } from "./memory-retrieval.js";
 import { runArchon, DEFAULT_POOLS, resolveVaultDir } from "./archon/index.js";
+import { suggestExecution } from "./routing.js";
 
 const server = new McpServer({
   name: "provider-agents",
@@ -54,7 +55,7 @@ server.registerTool(
     const lines: string[] = [];
 
     for (const [name, profile] of Object.entries(config.profiles)) {
-      const timeout = profile.timeout ?? 300;
+      const timeout = profile.timeout ?? 600;
       lines.push(
         `${name} [${profile.invocation}] model=${profile.model} timeout=${timeout}s — ${profile.description}`,
       );
@@ -113,7 +114,7 @@ server.registerTool(
       system_prompt: z.string().optional().describe("System prompt text (the agent's role/instructions)"),
       bare: z.boolean().optional().describe("Disable hooks/plugins/LSP (claude-p only, default: false)"),
       stdin: z.boolean().optional().describe("Send prompt via stdin (cli only, default: false)"),
-      timeout: z.number().int().min(1).optional().describe("Timeout in seconds (default: 300)"),
+      timeout: z.number().int().min(1).optional().describe("Timeout in seconds (default: 600)"),
       mcp_config: z.array(z.string()).optional().describe("Extra MCP config paths (claude-p only)"),
       args: z.array(z.string()).optional().describe("Extra CLI flags (cli only)"),
       skills: z.array(z.string()).optional().describe("Skill folder names from skills/ (validated). Each becomes an --add-dir for the agent."),
@@ -278,9 +279,13 @@ server.registerTool(
         .describe(
           "Provider registry key to run this profile against (e.g. 'deepseek', 'moonshot'). Omit to use the profile's default provider.",
         ),
+      model: z
+        .string()
+        .optional()
+        .describe("Explicit model ID from the selected provider's models registry. Omit to use the profile/provider default."),
     }),
   },
-  async ({ profile: profileName, prompt, extra_args, provider }) => {
+  async ({ profile: profileName, prompt, extra_args, provider, model }) => {
     const config = getConfig();
     const profile = config.profiles[profileName];
 
@@ -298,8 +303,11 @@ server.registerTool(
     }
 
     // provider is LLM-supplied — validate against the registry (trust boundary).
+    const providers = loadProviders(join(globalConfigDir(), "providers.yaml"));
+    if (profile.invocation === "cli" && (provider || model)) {
+      return { content: [{ type: "text" as const, text: "provider/model overrides are only supported for claude-p profiles." }], isError: true };
+    }
     if (provider) {
-      const providers = loadProviders(join(globalConfigDir(), "providers.yaml"));
       if (!providers[provider]) {
         const known = Object.keys(providers).join(", ");
         return {
@@ -313,6 +321,17 @@ server.registerTool(
         };
       }
     }
+    const targetProvider = profile.invocation === "claude-p" ? provider ?? profile.provider ?? "deepseek" : "cli";
+    const targetModel = profile.invocation === "claude-p"
+      ? model ?? (provider ? providers[targetProvider].model : profile.model)
+      : profile.model;
+    if (profile.invocation === "claude-p") {
+      try {
+        validateProviderModel(targetProvider, targetModel, providers);
+      } catch (e) {
+        return { content: [{ type: "text" as const, text: `Error: ${e instanceof Error ? e.message : String(e)}` }], isError: true };
+      }
+    }
 
     cleanupOldOutputs(config.defaults.output_dir, 7);
     const outputPath = createOutputPath(
@@ -320,13 +339,13 @@ server.registerTool(
       profileName,
     );
 
-    const enrichedPrompt = enrichPrompt(prompt, profile.model);
+    const enrichedPrompt = enrichPrompt(prompt, targetModel);
     const enrichedArgs = autoAddDir(profile.invocation, extra_args, process.cwd());
 
     // Run the target agent and the memory recall CONCURRENTLY: the flash
-    // retriever reads memories/ relevant to `prompt` while the target runs, so
-    // recall adds ~0 wall-clock. Recall surfaces to THIS response (the main
-    // conversation) — it is NOT injected into the target agent.
+    // retriever reads the central memories dir relevant to `prompt` while the
+    // target runs, so recall adds ~0 wall-clock. Recall surfaces to THIS response
+    // (the main conversation) — it is NOT injected into the target agent.
     const [result, recall] = await Promise.all([
       spawnAgent(
         profile,
@@ -336,6 +355,7 @@ server.registerTool(
         enrichedArgs,
         process.cwd(),
         provider,
+        model,
       ),
       retrieveMemories(config, profileName, prompt, process.cwd()),
     ]);
@@ -580,6 +600,40 @@ server.registerTool(
       };
     }
     return { content: [{ type: "text" as const, text: content }] };
+  },
+);
+
+server.registerTool(
+  "suggest_execution",
+  {
+    title: "Suggest Execution",
+    description:
+      "Select a role profile and an allowed provider/model target using deterministic, auditable use-case rules.",
+    inputSchema: z.object({
+      task_description: z.string().describe("Task to route, including relevant complexity and input modality."),
+    }),
+  },
+  async ({ task_description }) => {
+    try {
+      const config = getConfig();
+      const providers = loadProviders(join(globalConfigDir(), "providers.yaml"));
+      const suggestion = suggestExecution(task_description, config, providers);
+      const lines = [
+        `Suggested profile: ${suggestion.profile}`,
+        `Provider: ${suggestion.provider}`,
+        `Model: ${suggestion.model}`,
+        `Confidence: ${suggestion.confidence}`,
+        `Reasons: ${suggestion.reasons.join(", ")}`,
+        suggestion.alternative
+          ? `Alternative: profile=${suggestion.alternative.profile} provider=${suggestion.alternative.provider} model=${suggestion.alternative.model}`
+          : "",
+        "",
+        `Use: spawn_agent(profile="${suggestion.profile}", provider="${suggestion.provider}", model="${suggestion.model}", prompt="<your task>")`,
+      ].filter(Boolean);
+      return { content: [{ type: "text" as const, text: lines.join("\n") }] };
+    } catch (e) {
+      return { content: [{ type: "text" as const, text: `Error: ${e instanceof Error ? e.message : String(e)}` }], isError: true };
+    }
   },
 );
 

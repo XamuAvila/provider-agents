@@ -25,24 +25,24 @@ describe("autoAddDir", () => {
 
 describe("enrichPrompt", () => {
   it("wraps prompt in <context>/<task> XML tags for deepseek model", () => {
-    const result = enrichPrompt("find bugs in this code", "deepseek-v4-pro[1m]");
+    const result = enrichPrompt("find bugs in this code", "deepseek-v4-pro");
     expect(result).toContain("<task>");
     expect(result).toContain("find bugs in this code");
     expect(result).toContain("</task>");
   });
 
   it("adds structured-output instruction for deepseek", () => {
-    const result = enrichPrompt("analyze this", "deepseek-v4-pro[1m]");
+    const result = enrichPrompt("analyze this", "deepseek-v4-pro");
     expect(result).toContain("structured");
   });
 
   it("strips 'pense passo a passo' anti-pattern from prompt for deepseek", () => {
-    const result = enrichPrompt("pense passo a passo e analise", "deepseek-v4-pro[1m]");
+    const result = enrichPrompt("pense passo a passo e analise", "deepseek-v4-pro");
     expect(result).not.toContain("pense passo a passo");
   });
 
   it("strips 'think step by step' anti-pattern from prompt for deepseek", () => {
-    const result = enrichPrompt("think step by step and analyze", "deepseek-v4-pro[1m]");
+    const result = enrichPrompt("think step by step and analyze", "deepseek-v4-pro");
     expect(result).not.toContain("think step by step");
   });
 
@@ -54,7 +54,7 @@ describe("enrichPrompt", () => {
 
   it("does NOT modify prompt that already has XML tags", () => {
     const original = "<task>find bugs</task>";
-    const result = enrichPrompt(original, "deepseek-v4-pro[1m]");
+    const result = enrichPrompt(original, "deepseek-v4-pro");
     expect(result).not.toContain("<task><task>");
     expect(result).toContain("<task>find bugs</task>");
   });

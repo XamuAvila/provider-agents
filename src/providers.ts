@@ -5,7 +5,16 @@ import yaml from "js-yaml";
 export interface ProviderDef {
   base_url: string;
   model: string;
+  models?: Record<string, ProviderModelDef>;
   env?: Record<string, string>;
+}
+
+export interface ProviderModelDef {
+  capabilities: string[];
+  context_window: number;
+  cost_tier: "low" | "medium" | "high";
+  thinking: "optional" | "always";
+  best_for?: string[];
 }
 
 export interface Preset {
@@ -63,4 +72,19 @@ export function resolveProviderEnv(
     ...(provider.env ?? {}),
     ...(secrets[providerName] ?? {}),
   };
+}
+
+export function validateProviderModel(
+  providerName: string,
+  model: string,
+  providers: Record<string, ProviderDef>,
+): void {
+  const provider = providers[providerName];
+  if (!provider) throw new Error(`unknown provider: ${providerName}`);
+  const known = new Set([provider.model, ...Object.keys(provider.models ?? {})]);
+  if (!known.has(model)) {
+    throw new Error(
+      `unknown model "${model}" for provider "${providerName}"; known: ${[...known].join(", ")}`,
+    );
+  }
 }

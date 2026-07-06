@@ -174,7 +174,6 @@ Generators: `gen-gptoss` (OpenAI 120B), `gen-nemotron-super` (Nvidia 120B),
 | Review TS com LSP | `ts-reviewer` | DeepSeek (pago) |
 | Review Python com LSP | `python-reviewer` | DeepSeek (pago) |
 | Review C# com LSP | `csharp-reviewer` | DeepSeek (pago) |
-| Inspeção read-only | `codex` | GPT-5.5 (pago) |
 | Geração free | `openrouter-coder` | FREE |
 | Review free | `openrouter-reviewer` | FREE |
 | Análise free (976K ctx) | `openrouter-reasoning` | FREE |

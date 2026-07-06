@@ -18,10 +18,10 @@
  *    no memories/ dir yet, and never recalls for the scribe/retriever themselves.
  */
 import { existsSync } from "node:fs";
-import { join } from "node:path";
 import { createOutputPath, readOutput } from "./output.js";
 import { spawnAgent } from "./spawner.js";
 import { MEMORY_WRITER_PROFILE } from "./memory-hook.js";
+import { resolveMemoriesDir } from "./memory-dir.js";
 import type { Config, SpawnResult } from "./types.js";
 
 export const MEMORY_RETRIEVER_PROFILE = "memory-retriever";
@@ -36,7 +36,8 @@ type SpawnFn = typeof spawnAgent;
 export interface RecallDeps {
   spawn?: SpawnFn;
   env?: NodeJS.ProcessEnv;
-  memoriesExist?: (cwd: string) => boolean;
+  memoriesDir?: string;
+  memoriesExist?: (dir: string) => boolean;
 }
 
 export interface RecallResult {
@@ -53,9 +54,9 @@ export function isAutoRecallEnabled(env: NodeJS.ProcessEnv = process.env): boole
 }
 
 /** The instruction handed to the retriever. The topic is the delegation prompt. */
-export function buildRecallPrompt(topic: string): string {
+export function buildRecallPrompt(topic: string, memoriesDir: string): string {
   return [
-    "Recupere memórias relevantes ao tópico abaixo lendo os arquivos em memories/*.md.",
+    `Recupere memórias relevantes ao tópico abaixo lendo os arquivos em ${memoriesDir}/*.md.`,
     "",
     "## Tópico (o que está sendo discutido / a tarefa a ser delegada)",
     topic,
@@ -80,7 +81,8 @@ export async function retrieveMemories(
 ): Promise<RecallResult | null> {
   const spawn = deps.spawn ?? spawnAgent;
   const env = deps.env ?? process.env;
-  const memoriesExist = deps.memoriesExist ?? ((c) => existsSync(join(c, "memories")));
+  const memoriesDir = deps.memoriesDir ?? resolveMemoriesDir(env);
+  const memoriesExist = deps.memoriesExist ?? ((d) => existsSync(d));
 
   // Never recall for the scribe or the retriever themselves.
   if (sourceProfile === MEMORY_RETRIEVER_PROFILE || sourceProfile === MEMORY_WRITER_PROFILE) {
@@ -89,9 +91,9 @@ export async function retrieveMemories(
   if (!isAutoRecallEnabled(env)) return null;
   const profile = config.profiles[MEMORY_RETRIEVER_PROFILE];
   if (!profile) return null;
-  if (!memoriesExist(cwd)) return null;
+  if (!memoriesExist(memoriesDir)) return null;
 
-  const prompt = buildRecallPrompt(topic);
+  const prompt = buildRecallPrompt(topic, memoriesDir);
   const outputPath = createOutputPath(config.defaults.output_dir, MEMORY_RETRIEVER_PROFILE);
 
   const result: SpawnResult = await spawn(

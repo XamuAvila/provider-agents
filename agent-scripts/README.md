@@ -10,6 +10,17 @@ Executable agent-scripts registered and run through the provider-agents MCP.
   `remove_script`, `run_script`.
 - Associate scripts with a profile via `add_profile(scripts=[...])` (stored as
   `scripts: []` on the profile in `config/profiles.yaml`).
+- Associated scripts are listed with absolute paths in that profile's prompt;
+  `claude-p` also receives the scripts directory through `--add-dir`. Execution
+  remains subject to the profile's Bash permissions.
+
+## Included utilities
+
+- `repo-facts.mjs`: stack and declared verification commands.
+- `changed-context.sh`: branch, worktree status, diff stats, recent commits.
+- `patch-sanity.sh`: whitespace, conflict markers, and large added files.
+- `semble-search.sh`: direct Semble CLI search with a writable isolated cache.
+- `mermaid-debug-html.mjs`: Mermaid source to styled debugging HTML under `/tmp`.
 
 ## Security
 

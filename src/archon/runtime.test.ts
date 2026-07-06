@@ -1,9 +1,13 @@
 import { describe, it, expect, vi } from "vitest";
-import { makeEngineDeps, runArchon } from "./runtime.js";
+import { DEFAULT_POOLS, makeEngineDeps, runArchon } from "./runtime.js";
 import type { EngineDeps } from "./types.js";
 import type { SpawnResult } from "../types.js";
 
 describe("makeEngineDeps", () => {
+  it("uses cross-family generators and verifiers by default", () => {
+    expect(DEFAULT_POOLS.generators).toEqual(["deepseek", "kimi-code"]);
+    expect(DEFAULT_POOLS.verifiers).toEqual(["deepseek", "kimi-code"]);
+  });
   it("outputPathFor returns unique, sanitized paths", () => {
     const deps = makeEngineDeps({ outputDir: "/tmp/archon-test-out" });
     const a = deps.outputPathFor("g1#0");

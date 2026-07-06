@@ -97,8 +97,8 @@ describe("mergeConfigs", () => {
     const project = loadConfig(join(FIXTURES, "project-profiles.yaml"));
     const merged = mergeConfigs(global, project);
 
-    expect(merged.profiles).toHaveProperty("codex");
-    expect(merged.profiles["codex"].invocation).toBe("cli");
+    expect(merged.profiles).toHaveProperty("pplx");
+    expect(merged.profiles["pplx"].invocation).toBe("cli");
   });
 
   it("project defaults override global defaults", () => {

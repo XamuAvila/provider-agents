@@ -4,7 +4,7 @@ import type { ClaudePProfile, CliProfile } from "../src/types.js";
 import type { ProviderDef } from "../src/providers.js";
 
 const PROVIDERS: Record<string, ProviderDef> = {
-  deepseek: { base_url: "https://api.deepseek.com/anthropic", model: "deepseek-v4-pro[1m]" },
+  deepseek: { base_url: "https://api.deepseek.com/anthropic", model: "deepseek-v4-pro" },
   moonshot: { base_url: "https://api.moonshot.ai/anthropic", model: "kimi-k2.6" },
 };
 const SPAWN_SECRETS = {
@@ -14,21 +14,21 @@ const SPAWN_SECRETS = {
 const spawnProfile: ClaudePProfile = {
   invocation: "claude-p",
   settings: "creds/explorer.json",
-  model: "deepseek-v4-pro[1m]",
+  model: "deepseek-v4-pro",
   provider: "deepseek",
   description: "t",
 };
 
 describe("resolveSpawnEnv", () => {
   it("uses the profile's provider and model by default", () => {
-    const { env, model } = resolveSpawnEnv(spawnProfile, undefined, PROVIDERS, SPAWN_SECRETS);
+    const { env, model } = resolveSpawnEnv(spawnProfile, undefined, undefined, PROVIDERS, SPAWN_SECRETS);
     expect(env.ANTHROPIC_BASE_URL).toBe("https://api.deepseek.com/anthropic");
     expect(env.ANTHROPIC_AUTH_TOKEN).toBe("sk-DS");
-    expect(model).toBe("deepseek-v4-pro[1m]");
+    expect(model).toBe("deepseek-v4-pro");
   });
 
   it("override switches provider env AND model to the provider default", () => {
-    const { env, model } = resolveSpawnEnv(spawnProfile, "moonshot", PROVIDERS, SPAWN_SECRETS);
+    const { env, model } = resolveSpawnEnv(spawnProfile, "moonshot", undefined, PROVIDERS, SPAWN_SECRETS);
     expect(env.ANTHROPIC_BASE_URL).toBe("https://api.moonshot.ai/anthropic");
     expect(env.ANTHROPIC_AUTH_TOKEN).toBe("sk-MOON");
     expect(model).toBe("kimi-k2.6");
@@ -37,11 +37,24 @@ describe("resolveSpawnEnv", () => {
   it("falls back to deepseek when profile has no provider", () => {
     const { env } = resolveSpawnEnv(
       { ...spawnProfile, provider: undefined },
-      undefined,
+      undefined, undefined,
       PROVIDERS,
       SPAWN_SECRETS,
     );
     expect(env.ANTHROPIC_BASE_URL).toBe("https://api.deepseek.com/anthropic");
+  });
+
+  it("uses a validated explicit model override", () => {
+    const providers = {
+      ...PROVIDERS,
+      moonshot: { ...PROVIDERS.moonshot, models: { "kimi-k2.7-code": { capabilities: [], context_window: 1, cost_tier: "high" as const, thinking: "always" as const } } },
+    };
+    const { model } = resolveSpawnEnv(spawnProfile, "moonshot", "kimi-k2.7-code", providers, SPAWN_SECRETS);
+    expect(model).toBe("kimi-k2.7-code");
+  });
+
+  it("rejects a model that does not belong to the selected provider", () => {
+    expect(() => resolveSpawnEnv(spawnProfile, "moonshot", "made-up", PROVIDERS, SPAWN_SECRETS)).toThrow(/unknown model/i);
   });
 });
 
@@ -103,7 +116,7 @@ describe("buildClaudePArgs", () => {
     const profile: ClaudePProfile = {
       invocation: "claude-p",
       settings: "/path/to/settings.json",
-      model: "deepseek-v4-pro[1m]",
+      model: "deepseek-v4-pro",
       description: "test",
     };
     const args = buildClaudePArgs(profile, "Hello", undefined, "kimi-k2.6");
@@ -155,8 +168,8 @@ describe("buildCliArgs", () => {
   it("uses stdin when stdin: true", () => {
     const profile: CliProfile = {
       invocation: "cli",
-      command: "codex exec",
-      model: "gpt-5.5",
+      command: "pplx",
+      model: "sonar-pro",
       stdin: true,
       description: "test",
     };
@@ -168,14 +181,14 @@ describe("buildCliArgs", () => {
   it("includes extra args from profile", () => {
     const profile: CliProfile = {
       invocation: "cli",
-      command: "codex exec",
-      model: "gpt-5.5",
-      args: ["--sandbox", "workspace-write"],
+      command: "pplx",
+      model: "sonar-pro",
+      args: ["--format", "text"],
       description: "test",
     };
     const result = buildCliArgs(profile, "Hello");
-    expect(result.args).toContain("--sandbox");
-    expect(result.args).toContain("workspace-write");
+    expect(result.args).toContain("--format");
+    expect(result.args).toContain("text");
   });
 
   it("includes system prompt when set", () => {
@@ -208,8 +221,8 @@ describe("buildCliArgs", () => {
   it("appends skills reference note to stdin for cli when skills resolve", () => {
     const profile: CliProfile = {
       invocation: "cli",
-      command: "codex exec",
-      model: "gpt-5.5",
+      command: "pplx",
+      model: "sonar-pro",
       stdin: true,
       description: "test",
       skills: ["design-patterns-typescript"],

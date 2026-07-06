@@ -219,20 +219,20 @@ por:
 
 Linha 72 — trocar:
 ```typescript
-        .describe("Profile name (e.g. 'deepseek', 'kimi', 'codex')"),
+        .describe("Profile name (e.g. 'deepseek', 'explorer', 'memory-writer')"),
 ```
 por:
 ```typescript
-        .describe("Profile name (e.g. 'deepseek', 'explorer', 'codex')"),
+        .describe("Profile name (e.g. 'deepseek', 'explorer', 'memory-writer')"),
 ```
 
 Linha 177 — trocar:
 ```typescript
-          "Profile name from profiles.yaml (e.g. 'deepseek', 'kimi', 'codex')",
+          "Profile name from profiles.yaml (e.g. 'deepseek', 'explorer', 'memory-writer')",
 ```
 por:
 ```typescript
-          "Profile name from profiles.yaml (e.g. 'deepseek', 'explorer', 'codex')",
+          "Profile name from profiles.yaml (e.g. 'deepseek', 'explorer', 'memory-writer')",
 ```
 
 - [ ] **Step 4: Atualizar docs/daily-usage-guide.md**

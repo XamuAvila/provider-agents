@@ -14,19 +14,47 @@
 providers:
   deepseek:
     base_url: https://api.deepseek.com/anthropic
-    model: "deepseek-v4-pro[1m]"
+    model: deepseek-v4-pro
+    models:
+      deepseek-v4-pro:
+        capabilities: [coding, reasoning, tool-use, long-context]
+        context_window: 1048576
+        cost_tier: medium
+        thinking: optional
+        best_for: [analysis, review, debugging, general-coding]
+      deepseek-v4-flash:
+        capabilities: [coding, reasoning, tool-use, long-context, fast]
+        context_window: 1048576
+        cost_tier: low
+        thinking: optional
+        best_for: [search, memory, triage, simple-tasks]
     env:
-      ANTHROPIC_DEFAULT_HAIKU_MODEL: "deepseek-v4-pro[1m]"
-      ANTHROPIC_DEFAULT_SONNET_MODEL: "deepseek-v4-pro[1m]"
-      ANTHROPIC_DEFAULT_OPUS_MODEL: "deepseek-v4-pro[1m]"
-      CLAUDE_CODE_SUBAGENT_MODEL: "deepseek-v4-pro[1m]"
+      ANTHROPIC_DEFAULT_HAIKU_MODEL: deepseek-v4-pro
+      ANTHROPIC_DEFAULT_SONNET_MODEL: deepseek-v4-pro
+      ANTHROPIC_DEFAULT_OPUS_MODEL: deepseek-v4-pro
+      CLAUDE_CODE_SUBAGENT_MODEL: deepseek-v4-pro
       CLAUDE_CODE_EFFORT_LEVEL: max
   moonshot:
     base_url: https://api.moonshot.ai/anthropic
     model: kimi-k2.6
+    models:
+      kimi-k2.6:
+        capabilities: [coding, reasoning, tool-use, multimodal, long-context]
+        context_window: 262144
+        cost_tier: high
+        thinking: optional
+        best_for: [multimodal, general-analysis, self-correction]
+      kimi-k2.7-code:
+        capabilities: [coding, reasoning, tool-use, multimodal, long-context, agentic]
+        context_window: 262144
+        cost_tier: high
+        thinking: always
+        best_for: [long-horizon-coding, agentic-coding, second-opinion]
     env:
       ANTHROPIC_DEFAULT_HAIKU_MODEL: kimi-k2.6
       ANTHROPIC_DEFAULT_SONNET_MODEL: kimi-k2.6
       ANTHROPIC_DEFAULT_OPUS_MODEL: kimi-k2.6
       CLAUDE_CODE_SUBAGENT_MODEL: kimi-k2.6
       ENABLE_TOOL_SEARCH: "false"
+      CLAUDE_CODE_AUTO_COMPACT_WINDOW: "262144"
+      CLAUDE_CODE_EFFORT_LEVEL: max

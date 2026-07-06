@@ -1,7 +1,7 @@
 import { describe, it, expect } from "vitest";
-import { mkdtempSync, writeFileSync, existsSync, statSync } from "node:fs";
+import { mkdtempSync, writeFileSync, readFileSync, existsSync, statSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { join, resolve } from "node:path";
 import {
   validateScriptName,
   listScripts,
@@ -10,6 +10,7 @@ import {
   removeScript,
   scriptExists,
   resolveScriptPaths,
+  appendScriptReferences,
   runScript,
 } from "../src/scripts.js";
 
@@ -74,6 +75,16 @@ describe("writeScript / getScript / listScripts / removeScript", () => {
     expect(paths).toHaveLength(1);
     expect(paths[0]).toContain("real.sh");
   });
+
+  it("appends existing script paths and descriptions to a prompt", () => {
+    const dir = tmpDir();
+    writeScript("facts.sh", "#!/bin/sh\n# description: collect facts\n", dir);
+    const prompt = appendScriptReferences("task", ["facts.sh", "missing.sh"], dir);
+    expect(prompt).toContain("task");
+    expect(prompt).toContain("facts.sh");
+    expect(prompt).toContain("collect facts");
+    expect(prompt).not.toContain("missing.sh");
+  });
 });
 
 describe("runScript", () => {
@@ -99,5 +110,25 @@ describe("runScript", () => {
     const r = await runScript("nope.sh", [], { dir });
     expect(r.status).toBe("error");
     expect(r.exitCode).toBe(127);
+  });
+
+  it("generates a Mermaid debugging HTML under /tmp", async () => {
+    const dir = tmpDir();
+    const source = join(dir, "debug.mmd");
+    const output = join(dir, "debug.html");
+    writeFileSync(source, "flowchart LR\n  A[Request] --> B{Valid?}\n  B -->|No| C[Error]\n");
+    const r = await runScript("mermaid-debug-html.mjs", [source, output, "Debug flow"]);
+    expect(r.status).toBe("ok");
+    expect(readFileSync(output, "utf8")).toContain('<pre class="mermaid diagram">');
+    expect(readFileSync(output, "utf8")).toContain("A[Request] --&gt; B{Valid?}");
+  });
+
+  it("rejects Mermaid HTML output outside /tmp", async () => {
+    const dir = tmpDir();
+    const source = join(dir, "debug.mmd");
+    writeFileSync(source, "flowchart LR\n  A --> B\n");
+    const r = await runScript("mermaid-debug-html.mjs", [source, resolve(dir, "../outside.html").replace("/tmp/", "/var/tmp/")]);
+    expect(r.status).toBe("error");
+    expect(r.exitCode).toBe(2);
   });
 });

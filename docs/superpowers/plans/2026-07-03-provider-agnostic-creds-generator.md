@@ -516,10 +516,10 @@ function setup() {
     "    provider: deepseek",
     "    permissions: no-write",
     "    description: d",
-    "  codex:",
+    "  pplx:",
     "    invocation: cli",
-    "    command: codex exec",
-    "    model: gpt-5.5",
+    "    command: pplx",
+    "    model: sonar-pro",
     "    description: c",
     "",
   ].join("\n"));
@@ -542,7 +542,7 @@ describe("generateCreds", () => {
     });
     const dsPath = join(dir, "creds", "deepseek.json");
     expect(written).toContain(dsPath);
-    expect(written.some((p) => p.includes("codex"))).toBe(false); // cli skipped
+    expect(written.some((p) => p.includes("pplx"))).toBe(false); // cli skipped
 
     const cred = JSON.parse(readFileSync(dsPath, "utf-8"));
     expect(cred.$schema).toBe("https://json.schemastore.org/claude-code-settings.json");
@@ -891,7 +891,6 @@ Pass `provider` through the spawn call:
 | explorer, reviewer, researcher, security-reviewer, refactorer | readonly |
 | coder, analyst, ts-reviewer, python-reviewer, csharp-reviewer, go-reviewer | no-write |
 | memory-writer | write-md |
-| codex | (cli — no change) |
 
 - [ ] **Step 1: Edit `config/profiles.yaml`** — for EVERY `claude-p` profile:
   - REMOVE the `settings:` line (now derived as `creds/<name>.json`).
@@ -900,7 +899,7 @@ Pass `provider` through the spawn call:
   - ADD `permissions: <preset from the table above>`.
   - KEEP `mcp_config:` where present (explorer keeps `- semble.mcp.json`; others keep `[]` or drop the empty line — either is fine, prefer removing empty `mcp_config: []` for cleanliness).
   - KEEP `model`, `system_prompt`, `bare`, `skills`, `color`, `tags`, `timeout`, `description`.
-  Leave the `codex` (cli) profile untouched.
+  CLI profiles do not use generated creds.
 
 - [ ] **Step 2: Update the `profiles.yaml` header comment block** — replace the `settings`/`allowed_tools` field docs and the "Guards de segurança" section to describe: `provider` (registry key), `permissions` (preset name), that creds are GENERATED (permission-only) by `scripts/gen-creds.ts`, and that the token lives only in `config/creds/secrets.json`. Remove references to per-file `settings: creds/deepseek.json` and `allowed_tools`.
 

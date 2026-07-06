@@ -7,17 +7,14 @@ import { deriveTags } from "./trace.js";
 import { bestPracticeSpec, assemble, type Pools } from "./assemble.js";
 import { writeTrace } from "./memory.js";
 
-/** Default model pool — deepseek-only. The free OpenRouter generators
- *  (gen-gptoss/nemotron/gemma) were removed for reliability (documented 429s
- *  and dead free models). The ensemble now derives its N candidates from
- *  deepseek best-of-N sampling rather than cross-family diversity. Callers
- *  wanting a multi-family pool can inject one via RunOpts.pools. */
+/** Cross-family defaults: DeepSeek anchors analysis/ranking while Kimi provides
+ * an independent coding/reasoning trajectory and verifier vote. */
 export const DEFAULT_POOLS: Pools = {
-  generators: ["deepseek"],
+  generators: ["deepseek", "kimi-code"],
   fuser: "deepseek",
   critic: "deepseek",
   ranker: "deepseek",
-  verifiers: ["deepseek"],
+  verifiers: ["deepseek", "kimi-code"],
   tester: "deepseek",
 };
 

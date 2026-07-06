@@ -1,10 +1,10 @@
 import { describe, it, expect } from "vitest";
-import { resolveProviderEnv, type ProviderDef } from "../src/providers.js";
+import { resolveProviderEnv, validateProviderModel, type ProviderDef } from "../src/providers.js";
 
 const PROVIDERS: Record<string, ProviderDef> = {
   deepseek: {
     base_url: "https://api.deepseek.com/anthropic",
-    model: "deepseek-v4-pro[1m]",
+    model: "deepseek-v4-pro",
     env: { ANTHROPIC_DEFAULT_HAIKU_MODEL: "deepseek-v4-pro" },
   },
 };
@@ -31,5 +31,12 @@ describe("resolveProviderEnv", () => {
     const env = resolveProviderEnv("deepseek", PROVIDERS, {});
     expect(env.ANTHROPIC_BASE_URL).toBe("https://api.deepseek.com/anthropic");
     expect(env.ANTHROPIC_AUTH_TOKEN).toBeUndefined();
+  });
+});
+
+describe("validateProviderModel", () => {
+  it("accepts the provider default and rejects unknown model ids", () => {
+    expect(() => validateProviderModel("deepseek", "deepseek-v4-pro", PROVIDERS)).not.toThrow();
+    expect(() => validateProviderModel("deepseek", "kimi-k2.7-code", PROVIDERS)).toThrow(/unknown model/i);
   });
 });

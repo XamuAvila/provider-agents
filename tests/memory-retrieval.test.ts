@@ -34,6 +34,10 @@ function makeConfig(withRetriever = true): Config {
   return { defaults: { output_dir: outputDir }, profiles };
 }
 
+function makeMemoriesDir(): string {
+  return mkdtempSync(join(tmpdir(), "pa-memdir-"));
+}
+
 function okResult(text: string): SpawnResult & { _text: string } {
   // The mock spawn writes nothing to disk; we stub readOutput via the output file
   // by returning a path the test's fake reader knows. Instead we inject text
@@ -68,9 +72,11 @@ describe("isAutoRecallEnabled", () => {
 });
 
 describe("buildRecallPrompt", () => {
-  it("embeds the topic", () => {
-    const p = buildRecallPrompt("how does the auth middleware work?");
+  it("embeds the topic and memories directory", () => {
+    const memoriesDir = makeMemoriesDir();
+    const p = buildRecallPrompt("how does the auth middleware work?", memoriesDir);
     expect(p).toContain("how does the auth middleware work?");
+    expect(p).toContain(memoriesDir);
   });
 });
 
@@ -82,6 +88,7 @@ describe("retrieveMemories — gating (no spawn)", () => {
     const res = await retrieveMemories(makeConfig(), MEMORY_RETRIEVER_PROFILE, "t", "/proj", {
       spawn,
       env: {},
+      memoriesDir: makeMemoriesDir(),
       memoriesExist: () => true,
     });
     expect(res).toBeNull();
@@ -93,6 +100,7 @@ describe("retrieveMemories — gating (no spawn)", () => {
     const res = await retrieveMemories(makeConfig(), MEMORY_WRITER_PROFILE, "t", "/proj", {
       spawn,
       env: {},
+      memoriesDir: makeMemoriesDir(),
       memoriesExist: () => true,
     });
     expect(res).toBeNull();
@@ -115,6 +123,7 @@ describe("retrieveMemories — gating (no spawn)", () => {
     const res = await retrieveMemories(makeConfig(false), "explorer", "t", "/proj", {
       spawn,
       env: {},
+      memoriesDir: makeMemoriesDir(),
       memoriesExist: () => true,
     });
     expect(res).toBeNull();
@@ -144,6 +153,7 @@ describe("retrieveMemories — spawn behavior", () => {
     const res = await retrieveMemories(config, "explorer", "auth middleware", "/proj", {
       spawn: spawn as never,
       env: {},
+      memoriesDir: makeMemoriesDir(),
       memoriesExist: () => true,
     });
     expect(res).not.toBeNull();
@@ -165,6 +175,7 @@ describe("retrieveMemories — spawn behavior", () => {
     const res = await retrieveMemories(config, "explorer", "unrelated topic", "/proj", {
       spawn: spawn as never,
       env: {},
+      memoriesDir: makeMemoriesDir(),
       memoriesExist: () => true,
     });
     expect(res).not.toBeNull();
@@ -177,6 +188,7 @@ describe("retrieveMemories — spawn behavior", () => {
     const res = await retrieveMemories(config, "explorer", "t", "/proj", {
       spawn: spawn as never,
       env: {},
+      memoriesDir: makeMemoriesDir(),
       memoriesExist: () => true,
     });
     expect(res).toBeNull();

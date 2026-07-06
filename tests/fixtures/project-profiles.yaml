@@ -12,10 +12,10 @@ profiles:
     allowed_tools: []
     description: DeepSeek project override.
 
-  codex:
+  pplx:
     invocation: cli
-    command: codex exec
-    model: gpt-5.5
+    command: pplx
+    model: sonar-pro
     stdin: true
-    args: [--sandbox, workspace-write]
-    description: Codex project-only profile.
+    args: [--format, text]
+    description: Perplexity project-only profile.

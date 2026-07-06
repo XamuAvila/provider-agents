@@ -51,6 +51,8 @@ export interface SpawnOptions {
   prompt: string;
   extraArgs?: string[];
   cwd?: string;
+  provider?: string;
+  model?: string;
 }
 
 export type SpawnStatus = "ok" | "error" | "timeout";

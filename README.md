@@ -2,7 +2,7 @@
 
 MCP server that spawns isolated LLM agent sessions across multiple providers.
 
-Delegate tasks to DeepSeek, Kimi, Codex, or any Anthropic-compatible API without consuming the quota of your primary model. Each spawn runs as a separate process with its own context, tools, and settings.
+Delegate tasks to DeepSeek, Kimi, or any Anthropic-compatible API without consuming the quota of your primary model. Each spawn runs as a separate process with its own context, tools, and settings.
 
 ## Install
 
@@ -60,6 +60,7 @@ Each `claude-p` profile needs a settings JSON with API credentials:
 | `add_profile` | Create or update a profile in the project `.claude/profiles.yaml` |
 | `remove_profile` | Remove a profile from the project `.claude/profiles.yaml` |
 | `suggest_profile` | Suggest the best profile for a task description (tag/keyword scoring) |
+| `suggest_execution` | Select an auditable profile + provider + allowed model for a task |
 | `list_skills` | List reference skills that can be assigned to profiles |
 | `get_skill` | Read a skill's index or a specific pattern file |
 | `archon_run` | Run the Archon inference-time ensemble (generate → verify/test-select) |

@@ -16,7 +16,9 @@
  * This lives at the `spawn_agent` MCP-handler boundary, NOT inside spawnAgent(),
  * so the internal ensemble spawns of `archon_run` do NOT each trigger a scribe.
  */
+import { existsSync, mkdirSync } from "node:fs";
 import { createOutputPath } from "./output.js";
+import { resolveMemoriesDir } from "./memory-dir.js";
 import { spawnAgent } from "./spawner.js";
 import type { Config, SpawnResult } from "./types.js";
 
@@ -30,6 +32,7 @@ type SpawnFn = typeof spawnAgent;
 export interface MemoryHookDeps {
   spawn?: SpawnFn;
   env?: NodeJS.ProcessEnv;
+  memoriesDir?: string;
 }
 
 /**
@@ -52,6 +55,7 @@ export function buildMemoryPrompt(
   sourceProfile: string,
   task: string,
   result: SpawnResult,
+  memoriesDir: string,
 ): string {
   return [
     `A provider-agent (profile "${sourceProfile}", model ${result.model}) just`,
@@ -64,13 +68,23 @@ export function buildMemoryPrompt(
     `Full output file: ${result.outputPath}`,
     `Read that file to see what the agent actually produced.`,
     ``,
+    `## Where to write the memory note`,
+    `Write to ${memoriesDir}/<slug>.md (create the folder with mkdir -p if needed).`,
+    `If no durable note is warranted, write nothing and say so in one line.`,
+    ``,
+    `## Documentation fetched by the agent`,
+    `If the agent fetched external documentation (docs, APIs, release notes,`,
+    `library pages), persist a durable summary in memory as well. Include the URL,`,
+    `fetch date (2026), and the key facts/versions/constraints found, so future`,
+    `agents do not need to fetch the same page again.`,
+    ``,
     `## Your job`,
     `Judge whether this interaction produced something durable — a decision made,`,
-    `an architectural choice, a non-obvious fact discovered, a constraint, or a`,
-    `rejected alternative with its reason. If yes, write a concise note to`,
-    `memories/<slug>.md per your system prompt. If it was routine (a trivial`,
-    `lookup, a throwaway answer) with nothing worth carrying to a future session,`,
-    `write nothing and say so in one line.`,
+    `an architectural choice, a non-obvious fact discovered, a constraint, a`,
+    `rejected alternative with its reason, or fetched documentation worth reusing.`,
+    `If yes, write a concise note per your system prompt. If it was routine (a`,
+    `trivial lookup, a throwaway answer) with nothing worth carrying to a future`,
+    `session, write nothing and say so in one line.`,
   ].join("\n");
 }
 
@@ -101,7 +115,12 @@ export function persistMemoryHook(
   const memProfile = config.profiles[MEMORY_WRITER_PROFILE];
   if (!memProfile) return false;
 
-  const prompt = buildMemoryPrompt(sourceProfile, task, result);
+  const memoriesDir = deps.memoriesDir ?? resolveMemoriesDir(env);
+  if (!existsSync(memoriesDir)) {
+    mkdirSync(memoriesDir, { recursive: true });
+  }
+
+  const prompt = buildMemoryPrompt(sourceProfile, task, result, memoriesDir);
   const outputPath = createOutputPath(config.defaults.output_dir, MEMORY_WRITER_PROFILE);
 
   // Fire-and-forget. The `void` + `.catch` guarantees a rejected memory spawn

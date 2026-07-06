@@ -33,6 +33,10 @@ function makeConfig(withMemory = true): Config {
   return { defaults: { output_dir: outputDir }, profiles };
 }
 
+function makeMemoriesDir(): string {
+  return mkdtempSync(join(tmpdir(), "pa-memdir-"));
+}
+
 function okResult(overrides: Partial<SpawnResult> = {}): SpawnResult {
   return {
     status: "ok",
@@ -65,21 +69,25 @@ describe("isAutoMemoryEnabled", () => {
 
 describe("buildMemoryPrompt", () => {
   it("references the source profile, the task, and the output file path", () => {
-    const prompt = buildMemoryPrompt("explorer", "map all call sites of foo()", okResult());
+    const memoriesDir = makeMemoriesDir();
+    const prompt = buildMemoryPrompt("explorer", "map all call sites of foo()", okResult(), memoriesDir);
     expect(prompt).toContain("explorer");
     expect(prompt).toContain("map all call sites of foo()");
     expect(prompt).toContain("/tmp/provider-agents/20260703-explorer.md");
+    expect(prompt).toContain(memoriesDir);
   });
 });
 
 describe("persistMemoryHook", () => {
   it("fires the memory-writer for a successful non-memory spawn", () => {
     const config = makeConfig();
+    const memoriesDir = makeMemoriesDir();
     const spawn = vi.fn().mockResolvedValue(okResult({ profile: MEMORY_WRITER_PROFILE }));
 
     const triggered = persistMemoryHook(config, "explorer", "the task", okResult(), "/proj", {
       spawn,
       env: {},
+      memoriesDir,
     });
 
     expect(triggered).toBe(true);
@@ -88,6 +96,7 @@ describe("persistMemoryHook", () => {
     expect(profileArg).toBe(memProfile);
     expect(nameArg).toBe(MEMORY_WRITER_PROFILE);
     expect(promptArg).toContain("the task");
+    expect(promptArg).toContain(memoriesDir);
     expect(extraArgs).toEqual(["--add-dir", config.defaults.output_dir]);
     expect(cwdArg).toBe("/proj");
   });
@@ -101,7 +110,7 @@ describe("persistMemoryHook", () => {
       "t",
       okResult({ profile: MEMORY_WRITER_PROFILE }),
       "/proj",
-      { spawn, env: {} },
+      { spawn, env: {}, memoriesDir: makeMemoriesDir() },
     );
     expect(triggered).toBe(false);
     expect(spawn).not.toHaveBeenCalled();
@@ -113,6 +122,7 @@ describe("persistMemoryHook", () => {
     const triggered = persistMemoryHook(config, "explorer", "t", okResult(), "/proj", {
       spawn,
       env: { PROVIDER_AGENTS_AUTO_MEMORY: "0" },
+      memoriesDir: makeMemoriesDir(),
     });
     expect(triggered).toBe(false);
     expect(spawn).not.toHaveBeenCalled();
@@ -125,6 +135,7 @@ describe("persistMemoryHook", () => {
       const triggered = persistMemoryHook(config, "explorer", "t", okResult({ status }), "/proj", {
         spawn,
         env: {},
+        memoriesDir: makeMemoriesDir(),
       });
       expect(triggered).toBe(false);
     }
@@ -137,6 +148,7 @@ describe("persistMemoryHook", () => {
     const triggered = persistMemoryHook(config, "explorer", "t", okResult(), "/proj", {
       spawn,
       env: {},
+      memoriesDir: makeMemoriesDir(),
     });
     expect(triggered).toBe(false);
     expect(spawn).not.toHaveBeenCalled();
@@ -149,6 +161,7 @@ describe("persistMemoryHook", () => {
     const triggered = persistMemoryHook(config, "explorer", "t", okResult(), "/proj", {
       spawn,
       env: {},
+      memoriesDir: makeMemoriesDir(),
     });
     expect(triggered).toBe(true);
     // let the rejected promise settle; the .catch must absorb it.

@@ -23,10 +23,10 @@ function setup(): string {
       "    provider: deepseek",
       "    permissions: no-write",
       "    description: d",
-      "  codex:",
+      "  pplx:",
       "    invocation: cli",
-      "    command: codex exec",
-      "    model: gpt-5.5",
+      "    command: pplx",
+      "    model: sonar-pro",
       "    description: c",
       "",
     ].join("\n"),
@@ -50,7 +50,7 @@ describe("generateCreds", () => {
     const presetPath = join(dir, "creds", "no-write.json");
     expect(written).toEqual([presetPath]); // single distinct preset used
     expect(written.some((p) => p.includes("deepseek"))).toBe(false); // not per-profile
-    expect(written.some((p) => p.includes("codex"))).toBe(false); // cli skipped
+    expect(written.some((p) => p.includes("pplx"))).toBe(false); // cli skipped
 
     const cred = JSON.parse(readFileSync(presetPath, "utf-8"));
     expect(cred.$schema).toBe("https://json.schemastore.org/claude-code-settings.json");

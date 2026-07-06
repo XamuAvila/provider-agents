@@ -2,9 +2,11 @@ import { spawn as cpSpawn } from "node:child_process";
 import { createWriteStream } from "node:fs";
 import { join } from "node:path";
 import { resolveSkillPaths } from "./skills.js";
+import { appendScriptReferences, getScriptsDir } from "./scripts.js";
 import { globalConfigDir } from "./config.js";
 import {
   resolveProviderEnv,
+  validateProviderModel,
   loadProviders,
   loadSecrets,
   type ProviderDef,
@@ -51,19 +53,21 @@ const DEFAULT_PROVIDER = "deepseek";
 
 /**
  * Resolve which provider env + model a claude-p spawn should use.
- * provider = override ?? profile.provider ?? "deepseek". When the caller
- * overrides the provider, profile.model is provider-specific and no longer
- * valid, so the target provider's default model is used instead.
+ * provider = override ?? profile.provider ?? "deepseek". An explicit model
+ * override wins after validation against that provider's registry; otherwise a
+ * provider override uses its default model and the profile keeps its own model.
  */
 export function resolveSpawnEnv(
   profile: ClaudePProfile,
   providerOverride: string | undefined,
+  modelOverride: string | undefined,
   providers: Record<string, ProviderDef>,
   secrets: Record<string, Record<string, string>>,
 ): { env: Record<string, string>; model: string } {
   const providerName = providerOverride ?? profile.provider ?? DEFAULT_PROVIDER;
   const env = resolveProviderEnv(providerName, providers, secrets);
-  const model = providerOverride ? providers[providerName].model : profile.model;
+  const model = modelOverride ?? (providerOverride ? providers[providerName].model : profile.model);
+  validateProviderModel(providerName, model, providers);
   return { env, model };
 }
 
@@ -104,7 +108,7 @@ export function buildCliArgs(
   };
 }
 
-const DEFAULT_TIMEOUT = 300;
+const DEFAULT_TIMEOUT = 600;
 
 export async function spawnAgent(
   profile: Profile,
@@ -114,6 +118,7 @@ export async function spawnAgent(
   extraArgs?: string[],
   cwd?: string,
   providerOverride?: string,
+  modelOverride?: string,
 ): Promise<SpawnResult> {
   const timeout = (profile.timeout ?? DEFAULT_TIMEOUT) * 1000;
   const start = Date.now();
@@ -123,6 +128,7 @@ export async function spawnAgent(
   let stdinData: string | undefined;
   let childEnv: NodeJS.ProcessEnv = process.env;
   let resolvedModel = profile.model;
+  const promptWithScripts = appendScriptReferences(prompt, profile.scripts ?? []);
 
   if (profile.invocation === "claude-p") {
     // Inject the provider env (token + base_url + tuning) into the child's
@@ -131,19 +137,20 @@ export async function spawnAgent(
     const dir = globalConfigDir();
     const providers = loadProviders(join(dir, "providers.yaml"));
     const secrets = loadSecrets(join(dir, "creds", "secrets.json"));
-    const resolved = resolveSpawnEnv(profile, providerOverride, providers, secrets);
+    const resolved = resolveSpawnEnv(profile, providerOverride, modelOverride, providers, secrets);
     resolvedModel = resolved.model;
     childEnv = { ...process.env, ...resolved.env };
     command = "claude";
-    args = buildClaudePArgs(profile, prompt, extraArgs, resolvedModel);
+    const scriptArgs = profile.scripts?.length ? ["--add-dir", getScriptsDir()] : [];
+    args = buildClaudePArgs(profile, promptWithScripts, [...scriptArgs, ...(extraArgs ?? [])], resolvedModel);
   } else {
-    const cliArgs = buildCliArgs(profile, prompt);
+    const cliArgs = buildCliArgs(profile, promptWithScripts);
     command = cliArgs.command;
     args = cliArgs.args;
     stdinData = cliArgs.stdin;
   }
 
-  // Split compound commands (e.g. "codex exec" -> spawn "codex" with ["exec", ...])
+  // Split compound commands (e.g. "pplx ask" -> spawn "pplx" with ["ask", ...])
   const commandParts = command.split(/\s+/);
   if (commandParts.length > 1) {
     command = commandParts[0];
