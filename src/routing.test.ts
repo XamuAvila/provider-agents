@@ -19,6 +19,7 @@ const config: Config = {
     refactorer: profile("deepseek-v4-pro"), "security-reviewer": profile("deepseek-v4-pro"),
     websearcher: profile("deepseek-v4-flash"), kimi: profile("kimi-k2.6", "moonshot"),
     "agent-drawer": profile("deepseek-v4-flash"),
+    explainer: profile("deepseek-v4-pro"),
   },
 };
 const providers: Record<string, ProviderDef> = {
@@ -42,6 +43,11 @@ describe("suggestExecution", () => {
   it("routes Mermaid debugging diagrams to the drawer", () => {
     expect(suggestExecution("Desenhe um diagrama Mermaid deste fluxo", config, providers)).toMatchObject({
       profile: "agent-drawer", provider: "deepseek", model: "deepseek-v4-flash",
+    });
+  });
+  it("routes codebase understanding to the explainer", () => {
+    expect(suggestExecution("Explique como funciona este codebase para onboarding", config, providers)).toMatchObject({
+      profile: "explainer", provider: "deepseek", model: "deepseek-v4-pro",
     });
   });
 });

@@ -82,6 +82,29 @@ presets:
       - Read(**/.aws/**)
       - Read(**/.ssh/**)
       - Read(**/credentials)
+  explainer:
+    allow:
+      - Read
+      - Write(/tmp/**)
+      - Edit(/tmp/**)
+      - Bash(*repo-facts.mjs:*)
+      - Bash(*semble-search.sh:*)
+      - Bash(*mermaid-debug-html.mjs:*)
+      - Bash(xdg-open:*)
+      - Bash(mkdir:*)
+      - Bash(ls:*)
+      - Bash(grep:*)
+    deny:
+      - Read(./.env)
+      - Read(./.env.*)
+      - Read(**/.env)
+      - Read(**/.env.*)
+      - Read(**/*.pem)
+      - Read(**/id_rsa)
+      - Read(**/id_ed25519)
+      - Read(**/.aws/**)
+      - Read(**/.ssh/**)
+      - Read(**/credentials)
   # write: implementador que EXECUTA — Write/Edit/Bash/Read liberados; secrets negados.
   # deny sempre vence, então a leitura de .env/.ssh/.aws/*.pem segue bloqueada.
   write:

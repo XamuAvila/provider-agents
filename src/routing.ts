@@ -20,6 +20,7 @@ type Rule = {
 
 const RULES: Rule[] = [
   { profile: "agent-drawer", terms: ["diagrama", "diagram", "flowchart", "mermaid", "visualize", "visualizar", "desenhe", "draw"], reason: "visualização de fluxo de debugging" },
+  { profile: "explainer", terms: ["explique", "explain", "como funciona", "how it works", "entender", "understand", "onboarding", "discovery", "walkthrough", "modelo mental"], reason: "explicação e discovery de codebase" },
   { profile: "kimi", provider: "moonshot", model: "kimi-k2.6", terms: ["imagem", "image", "vídeo", "video", "multimodal", "screenshot"], reason: "entrada multimodal" },
   { profile: "security-reviewer", terms: ["security", "segurança", "vulnerability", "vulnerabilidade", "owasp", "auth", "injection", "xss"], reason: "revisão de segurança" },
   { profile: "websearcher", terms: ["web", "internet", "latest", "atualizado", "documentação externa", "release notes"], reason: "pesquisa web" },
