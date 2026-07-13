@@ -35,7 +35,7 @@ import { suggestExecution } from "./routing.js";
 
 const server = new McpServer({
   name: "provider-agents",
-  version: "0.4.0",
+  version: "0.5.0",
 });
 
 function getConfig(): Config {
